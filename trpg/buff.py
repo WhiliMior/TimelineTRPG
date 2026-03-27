@@ -14,10 +14,7 @@ from datetime import datetime
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# Buff数据存储
-_buff_storage: Dict[str, List[Dict]] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 # 属性别名配置
 ATTRIBUTE_ALIASES = {
@@ -162,11 +159,11 @@ class BuffModule:
     
     def _get_buffs(self, storage_key: str) -> List[Dict]:
         """获取buff列表"""
-        return _buff_storage.get(storage_key, [])
+        return StorageBackend.load(StorageType.USER, storage_key, default=[])
     
     def _save_buffs(self, storage_key: str, buffs: List[Dict]):
         """保存buff列表"""
-        _buff_storage[storage_key] = buffs
+        StorageBackend.save(StorageType.USER, storage_key, buffs)
     
     def _add_buff(self, storage_key: str, user_id: str, conversation_id: str, 
                   attribute: str, buff_type: str, value: float, duration) -> str:
@@ -337,7 +334,7 @@ def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value
     由战斗系统在定时事件触发时调用
     """
     storage_key = f"{user_id}"
-    buffs = _buff_storage.get(storage_key, [])
+    buffs = StorageBackend.load(StorageType.USER, storage_key, default=[])
     
     if not buffs:
         return False
@@ -351,7 +348,7 @@ def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value
     )]
     
     if len(buffs) < original_count:
-        _buff_storage[storage_key] = buffs
+        StorageBackend.save(StorageType.USER, storage_key, buffs)
         return True
     
     return False

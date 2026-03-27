@@ -14,10 +14,7 @@ from typing import Dict, List, Optional
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 武器数据存储
-_weapon_storage: Dict[str, List[Dict]] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 
 class WeaponModule:
@@ -181,9 +178,7 @@ class WeaponModule:
         char_name = active_char.get('name', '')
         storage_key = f"{user_id}:{char_name}"
         
-        if storage_key not in _weapon_storage:
-            _weapon_storage[storage_key] = []
-        return _weapon_storage[storage_key]
+        return StorageBackend.load_weapons(storage_key)
     
     async def _save_weapons(self, user_id: str, weapons: List[Dict]):
         """保存武器列表"""
@@ -193,7 +188,7 @@ class WeaponModule:
         
         char_name = active_char.get('name', '')
         storage_key = f"{user_id}:{char_name}"
-        _weapon_storage[storage_key] = weapons
+        StorageBackend.save_weapons(storage_key, weapons)
     
     async def _create_weapon(self, user_id: str, args: List[str]) -> str:
         """创建武器"""

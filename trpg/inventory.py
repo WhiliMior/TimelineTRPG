@@ -7,10 +7,7 @@ from typing import Dict, List
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 背包数据存储
-_inventory_storage: Dict[str, List[Dict]] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 
 class InventoryModule:
@@ -94,12 +91,10 @@ class InventoryModule:
         return True
     
     async def _get_inventory(self, user_id: str) -> List[Dict]:
-        if user_id not in _inventory_storage:
-            _inventory_storage[user_id] = []
-        return _inventory_storage[user_id]
+        return StorageBackend.load(StorageType.USER, user_id, filename="inventory.json", default=[])
     
     async def _save_inventory(self, user_id: str, items: List[Dict]):
-        _inventory_storage[user_id] = items
+        StorageBackend.save(StorageType.USER, user_id, items, filename="inventory.json")
     
     async def _list_inventory(self, user_id: str) -> str:
         items = await self._get_inventory(user_id)

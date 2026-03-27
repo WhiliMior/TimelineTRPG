@@ -9,10 +9,7 @@ from typing import Dict, Any, Optional
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 简单的内存存储
-_target_storage: Dict[str, Dict[str, Any]] = {}
+from ..adapter.storage import StorageBackend
 
 
 class TargetModule:
@@ -120,16 +117,15 @@ class TargetModule:
     
     async def _get_target(self, conversation_id: str) -> Optional[float]:
         """获取目标值"""
-        data = _target_storage.get(conversation_id)
+        data = StorageBackend.load_target(conversation_id)
         if data:
             return data.get("target_value")
         return None
     
     async def _set_target(self, conversation_id: str, target_value: float):
         """设置目标值"""
-        _target_storage[conversation_id] = {
-            "target_value": int(target_value)
-        }
+        data = {"target_value": int(target_value)}
+        StorageBackend.save_target(conversation_id, data)
     
     async def _get_current_target(self, conversation_id: str):
         """获取当前目标值（返回元组）"""

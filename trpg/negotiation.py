@@ -8,10 +8,7 @@ from typing import Dict, Optional
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 交涉目标存储
-_negotiation_target_storage: Dict[str, Dict] = {}
+from ..adapter.storage import StorageBackend
 
 
 class NegotiationModule:
@@ -119,13 +116,14 @@ class NegotiationModule:
         return True
     
     def _get_negotiation_target(self, conversation_id: str) -> Optional[Dict]:
-        return _negotiation_target_storage.get(conversation_id)
+        return StorageBackend.load_negotiation(conversation_id)
     
     def _set_negotiation_target(self, conversation_id: str, level: int, intelligence: int):
-        _negotiation_target_storage[conversation_id] = {
+        data = {
             "level": level,
             "intelligence": intelligence
         }
+        StorageBackend.save_negotiation(conversation_id, data)
     
     async def _perform_negotiation(self, ctx: CommandContext, conversation_id: str, rp_grade: float) -> str:
         """执行交涉检定"""

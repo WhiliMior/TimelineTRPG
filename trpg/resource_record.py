@@ -8,10 +8,7 @@ from datetime import datetime
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 资源记录存储
-_resource_record_storage: Dict[str, Dict] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 
 class ResourceRecordModule:
@@ -102,9 +99,10 @@ class ResourceRecordModule:
         return True
     
     def _get_resources(self, user_id: str) -> Dict:
-        if user_id not in _resource_record_storage:
-            _resource_record_storage[user_id] = {}
-        return _resource_record_storage[user_id]
+        return StorageBackend.load_resources(user_id)
+    
+    def _save_resources(self, user_id: str, resources: Dict):
+        StorageBackend.save_resources(user_id, resources)
     
     def _list_resources(self, user_id: str) -> str:
         resources = self._get_resources(user_id)
@@ -127,14 +125,14 @@ class ResourceRecordModule:
         else:
             resources[name] = {'value': value, 'created_at': datetime.now().isoformat()}
         
-        _resource_record_storage[user_id] = resources
+        self._save_resources(user_id, resources)
         return self.reply.render("resource_added", name=name, value=value)
     
     def _set_resource(self, user_id: str, name: str, value: int) -> str:
         resources = self._get_resources(user_id)
         
         resources[name] = {'value': value, 'created_at': datetime.now().isoformat()}
-        _resource_record_storage[user_id] = resources
+        self._save_resources(user_id, resources)
         return self.reply.render("resource_set", name=name, value=value)
     
     def _del_resource(self, user_id: str, name: str) -> str:
@@ -142,7 +140,7 @@ class ResourceRecordModule:
         
         if name in resources:
             del resources[name]
-            _resource_record_storage[user_id] = resources
+            self._save_resources(user_id, resources)
             return self.reply.render("resource_deleted", name=name)
         
         return self.reply.render("resource_not_found", name=name)

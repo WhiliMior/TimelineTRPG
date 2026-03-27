@@ -6,6 +6,7 @@ from .command_context import CommandContext
 from .reply import ReplyManager, ReplyPayload
 from .router import Router
 from .help import HelpEntry, HelpRegistry
+from .storage import StorageBackend, StorageType
 
 __all__ = [
     "CommandContext",
@@ -14,4 +15,6 @@ __all__ = [
     "Router",
     "HelpEntry",
     "HelpRegistry",
+    "StorageBackend",
+    "StorageType",
 ]

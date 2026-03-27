@@ -16,9 +16,7 @@ from typing import Dict, List, Optional, Any
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-# 战斗数据存储
-_battle_storage: Dict[str, Dict] = {}
+from ..adapter.storage import StorageBackend
 
 # 属性别名配置
 ATTRIBUTE_ALIASES = {
@@ -183,20 +181,14 @@ class BattleModule:
         return ATTRIBUTE_ALIASES.get(attribute, attribute)
     
     def _get_battle(self, storage_key: str) -> Dict:
-        if storage_key not in _battle_storage:
-            _battle_storage[storage_key] = {
-                "name": None,
-                "creator": None,
-                "participants": {},  # {user_id: {character_name: {status, last_action_time}}}
-                "ready": [],
-                "status": "idle",  # idle, ready, active, ended
-                "timeline": {},  # {time_str: [actions]}
-                "current_time": 0,
-                "max_time": 0,
-                "scheduled_events": [],
-                "player": {}  # {user_id: {player_id}}
-            }
-        return _battle_storage[storage_key]
+        battle = StorageBackend.load_battle(storage_key)
+        if not battle.get("battle_list"):
+            battle["battle_list"] = {}
+        return battle
+    
+    def _save_battle(self, storage_key: str, battle: Dict):
+        """保存战斗数据"""
+        StorageBackend.save_battle(storage_key, battle)
     
     def _get_character_module(self):
         """获取角色模块"""
@@ -313,7 +305,7 @@ class BattleModule:
     def _create_battle(self, storage_key: str, user_id: str, name: str) -> str:
         battle = self._get_battle(storage_key)
         
-        if battle["status"] != "idle":
+        if battle.get("status", "idle") != "idle":
             return self.reply.render("battle_already_exists")
         
         battle["name"] = name
@@ -321,6 +313,7 @@ class BattleModule:
         battle["status"] = "ready"
         battle["participants"] = {user_id: {}}
         
+        self._save_battle(storage_key, battle)
         return self.reply.render("battle_created", name=name)
     
     def _join_battle(self, storage_key: str, user_id: str) -> str:

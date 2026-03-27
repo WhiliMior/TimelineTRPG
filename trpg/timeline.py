@@ -15,10 +15,7 @@ import re
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 时间线数据存储
-_timeline_storage: Dict[str, Dict] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 
 class TimelineModule:
@@ -129,13 +126,16 @@ class TimelineModule:
         return True
     
     def _get_storage(self, storage_key: str) -> Dict:
-        if storage_key not in _timeline_storage:
-            _timeline_storage[storage_key] = {
-                "timelines": [],  # [{name, created_at, max_time, current_time, timeline: {}}]
-                "active_index": None,
-                "player_ids": {}  # {user_id: player_id}
-            }
-        return _timeline_storage[storage_key]
+        data = StorageBackend.load(StorageType.TIMELINE, storage_key, default={
+            "timelines": [],
+            "active_index": None,
+            "player_ids": {}
+        })
+        return data
+    
+    def _save_storage(self, storage_key: str, data: Dict):
+        """保存时间线数据"""
+        StorageBackend.save(StorageType.TIMELINE, storage_key, data)
     
     def _list_timelines(self, storage_key: str, user_id: str) -> str:
         data = self._get_storage(storage_key)

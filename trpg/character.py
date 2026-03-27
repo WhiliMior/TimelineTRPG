@@ -2,15 +2,13 @@
 角色管理模块 - 处理角色相关功能
 迁移自老项目 Game/Character/
 """
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 角色数据存储
-_character_storage: Dict[str, List[Dict]] = {}
+from ..adapter.storage import StorageBackend
 
 
 class CharacterModule:
@@ -37,6 +35,7 @@ class CharacterModule:
             usage="[序号|show|del]",
             summary="角色管理",
             detail=(
+                "角色管理 (.chr)\n"
                 "- 显示角色列表\n"
                 "show - 查看角色参数\n"
                 "{序号} - 切换角色\n"
@@ -46,10 +45,162 @@ class CharacterModule:
                 "  chr → 显示角色列表\n"
                 "  chr 1 → 选择第1个角色\n"
                 "  chr show → 显示角色详情\n"
-                "  chr del 2 → 删除第2个角色"
+                "  chr del 2 → 删除第2个角色\n"
+                "\n"
+                "创建角色 (.tlsetup)\n"
+                "格式: .tlsetup 名称:xxx,属性:值,...\n"
+                "\n"
+                "示例:\n"
+                "  .tlsetup 名称:勇者,力量:10,敏捷:8,体质:12,智力:9\n"
+                "  .tlsetup name:Hero,STR:10,DEX:8"
             ),
         )
     
+    @property
+    def help_entry_setup(self) -> HelpEntry:
+        return HelpEntry(
+            module="tlsetup",
+            usage="名称:xxx,属性:值,...",
+            summary="创建角色",
+            detail=(
+                "创建新角色\n"
+                "\n"
+                "格式: .tlsetup 名称:xxx,属性:值,...\n"
+                "\n"
+                "示例:\n"
+                "  .tlsetup 名称:勇者,力量:10,敏捷:8,体质:12,智力:9,感知:7,魅力:11,等级:1\n"
+                "  .tlsetup name:Hero,STR:10,DEX:8,CON:12,INT:9,WIS:7,CHA:11"
+            ),
+        )
+
+    def _is_number(self, s: str) -> bool:
+        """判断字符串是否为数字"""
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+
+    def _parse_character_attributes(self, args_str: str) -> Dict[str, any]:
+        """
+        解析角色属性
+        :param args_str: 命令参数字符串
+        :return: 属性字典
+        """
+        if not args_str:
+            return {}
+        
+        # 按逗号分割属性
+        attribute_list = args_str.split(',')
+        
+        # 解析属性
+        attribute_dict = {}
+        for element in attribute_list:
+            element = element.strip()
+            if ':' in element:
+                parts = element.split(':', 1)  # 只分割第一个冒号
+                if len(parts) == 2:
+                    attribute = parts[0].strip()
+                    value = parts[1].strip()
+                    # 属性为空则用0替代
+                    if len(value) == 0:
+                        value = 0
+                    
+                    # 对姓名/名称相关属性，不进行数字转换
+                    name_attributes = ['姓名', '名称', 'name', '名称']
+                    if attribute in name_attributes:
+                        # 姓名属性始终为字符串
+                        attribute_dict[attribute] = value
+                    else:
+                        # 其他属性按原逻辑处理
+                        if self._is_number(value):
+                            value = float(value)
+                        attribute_dict[attribute] = value
+        
+        # 如果没有名称属性，设置默认名称
+        if not any(key in attribute_dict for key in ['姓名', '名称', 'name']):
+            attribute_dict['名称'] = "未命名角色"
+        
+        return attribute_dict
+
+    def _organize_character_data(self, attributes: Dict[str, any], character_name: str) -> Dict[str, any]:
+        """
+        组织角色数据结构
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        character_data = {
+            "name": character_name,
+            "data": attributes,
+            "active": True,  # 设置为当前使用
+            "created_at": timestamp
+        }
+        
+        return character_data
+
+    async def tlsetup(self, ctx: CommandContext) -> bool:
+        """
+        处理 .tlsetup 命令 - 创建角色
+        格式: .tlsetup 名称:xxx,属性:值,...
+        示例: .tlsetup 名称:勇者,力量:10,敏捷:8,等级:1
+        """
+        user_id = ctx.sender_id or "default"
+        
+        if not ctx.args:
+            ctx.send("用法: .tlsetup 名称:xxx,属性:值,...\n示例: .tlsetup 名称:勇者,力量:10,敏捷:8")
+            return True
+        
+        # 合并所有参数（因为属性中可能包含空格）
+        args_str = ' '.join(ctx.args)
+        
+        # 解析角色属性
+        attributes = self._parse_character_attributes(args_str)
+        
+        if not attributes:
+            ctx.send("角色数据格式错误，请使用 名称:xxx,属性:值 的格式")
+            return True
+        
+        # 获取角色名称，支持多种名称字段
+        character_name = attributes.get('姓名', attributes.get('名称', attributes.get('name', "未命名角色")))
+        
+        # 组织角色数据
+        character_data = self._organize_character_data(attributes, character_name)
+        
+        # 获取现有角色列表
+        existing_characters = await self._get_user_characters(user_id)
+        
+        # 检查是否存在同名角色
+        existing_index = None
+        for i, char in enumerate(existing_characters):
+            if char.get('name') == character_name:
+                existing_index = i
+                break
+        
+        # 如果是新角色（非同名更新），则取消其他角色的激活状态
+        if existing_index is None:
+            for char in existing_characters:
+                char['active'] = False
+            # 新角色设为激活状态
+            character_data['active'] = True
+        else:
+            # 如果是更新同名角色，保持其原有的激活状态
+            original_active = existing_characters[existing_index].get('active', False)
+            character_data['active'] = original_active
+        
+        # 更新或添加角色数据
+        if existing_index is not None:
+            existing_characters[existing_index] = character_data
+        else:
+            existing_characters.append(character_data)
+        
+        # 保存角色数据
+        if await self._save_characters(user_id, existing_characters):
+            ctx.send(f"角色 [{character_name}] 创建成功！")
+        else:
+            ctx.send("保存角色数据失败")
+        
+        return True
+
     async def chr(self, ctx: CommandContext) -> bool:
         """
         处理角色管理命令
@@ -109,12 +260,11 @@ class CharacterModule:
     
     async def _get_user_characters(self, user_id: str) -> List[Dict]:
         """获取用户所有角色"""
-        return _character_storage.get(user_id, [])
+        return StorageBackend.load_characters(user_id)
     
     async def _save_characters(self, user_id: str, characters: List[Dict]) -> bool:
         """保存角色列表"""
-        _character_storage[user_id] = characters
-        return True
+        return StorageBackend.save_characters(user_id, characters)
     
     async def _get_character_list(self, user_id: str) -> str:
         """获取角色列表"""

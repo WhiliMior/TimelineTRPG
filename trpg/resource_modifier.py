@@ -9,10 +9,7 @@ from datetime import datetime
 from ..adapter.command_context import CommandContext
 from ..adapter.reply import ReplyManager
 from ..adapter.help import HelpEntry
-
-
-# 资源修正数据存储
-_resource_modifier_storage: Dict[str, List[Dict]] = {}
+from ..adapter.storage import StorageBackend, StorageType
 
 
 class ResourceModifierModule:
@@ -110,10 +107,10 @@ class ResourceModifierModule:
         return True
     
     def _get_modifiers(self, user_id: str) -> List[Dict]:
-        return _resource_modifier_storage.get(user_id, [])
+        return StorageBackend.load(StorageType.RESOURCE, user_id, filename="modifiers.json", default=[])
     
     def _save_modifiers(self, user_id: str, modifiers: List[Dict]):
-        _resource_modifier_storage[user_id] = modifiers
+        StorageBackend.save(StorageType.RESOURCE, user_id, modifiers, filename="modifiers.json")
     
     def _add_modifier(self, user_id: str, source: str, range_input: str, value_str: str, type_input: str, duration: str) -> str:
         modifiers = self._get_modifiers(user_id)

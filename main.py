@@ -93,6 +93,9 @@ class TimelineTRPG(Star):
         self.router.register("WPsetup", self._wrap_with_sub_help(weapon_module, "wp_setup"))
         self.router.register("lv", self._wrap_with_sub_help(level_module, "lv"))
         
+        # 注册角色创建指令
+        self.router.register("tlsetup", self._wrap_with_sub_help(character_module, "tlsetup"))
+        
         # 这里可以注册更多指令
         # self.router.register("ex", self._wrap_with_sub_help(character_module, "ex"))
         # self.router.register("stat", self._wrap_with_sub_help(character_module, "stat"))
