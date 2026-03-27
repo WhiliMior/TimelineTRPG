@@ -1,0 +1,24 @@
+# TimelineTRPG Plugin for AstrBot
+# 
+# This plugin is designed to work with AstrBot and has no additional
+# external dependencies beyond what AstrBot provides.
+#
+# Requirements:
+# - AstrBot >= v4.0
+# 
+# The plugin uses only Python standard library and AstrBot's API:
+# - logging, json, os, dataclasses, typing, inspect
+# - random, re, datetime
+#
+# If you are running this plugin standalone (outside AstrBot),
+# you will need to install the dependencies from AstrBot's pyproject.toml
+#
+# For reference, the old TimelineBot (standalone) dependencies were:
+# PyYAML
+# aiohttp>=3.7.4,<4
+# APScheduler
+# qq-botpy>=1.0.0a8
+# Pillow
+#
+# AstrBot dependencies (if running standalone):
+# See: https://github.com/Soulter/AstrBot/blob/master/pyproject.toml
