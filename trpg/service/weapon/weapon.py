@@ -11,10 +11,16 @@
 """
 from typing import Dict, List, Optional
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
-from ..adapter.storage import StorageBackend, StorageType
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
+
+# 武器类型中英文映射
+WEAPON_TYPE_MAP = {
+    "amplifier": "增幅",
+    "artillery": "火力",
+    "none": "无类型",
+}
 
 
 class WeaponModule:
@@ -28,6 +34,12 @@ class WeaponModule:
     - .wp del <序号> - 删除武器
     - .wp create <名称> <类型> <属性> - 创建武器（需要完整参数）
     """
+    
+    def _get_type_display(self, weapon_type: str) -> str:
+        """获取武器类型的中文显示"""
+        if not weapon_type:
+            return "无类型"
+        return WEAPON_TYPE_MAP.get(weapon_type.lower(), weapon_type)
     
     def __init__(self):
         self.reply = ReplyManager("weapon")
@@ -43,61 +55,142 @@ class WeaponModule:
                 "{序号} - 选择武器\n"
                 "show {序号} - 查看武器详情\n"
                 "del {序号}/all - 删除武器\n"
-                "create {名称} {类型} {属性} (伤害) (射程) - 创建武器\n"
-                "\n"
-                "示例:\n"
-                "  wp → 显示武器列表\n"
-                "  wp 1 → 选择第1把武器\n"
-                "  wp show 1 → 查看第1把武器详情\n"
-                "  wp create 弓箭 投射 敏捷 10 50 → 创建武器"
+                "create {名称} {类型} {属性} (伤害) (射程) - 创建武器"
             ),
         )
     
     async def wp_setup(self, ctx: CommandContext) -> bool:
         """
-        处理武器创建命令 (.WPsetup)
-        格式: .WPsetup '名称':'值','类型':'值',...
-        示例: .WPsetup '名称':'激光枪','类型':'火力','伤害':20,'负重':3.5
+        处理武器创建命令 (.setupWP)
+        格式: .setupWP 名称:值,类型:值,...
+        示例: .setupWP 名称:激光枪,类型:火力,伤害:20,负重:3.5
         """
         import re
         user_id = ctx.sender_id or "default"
         
-        # 获取原始命令文本
-        raw_args = ctx.raw_message or ""
+        # 获取原始命令文本 (message_str 包含完整指令如 ".setupWP 名称:...")
+        raw_args = ctx.metadata.get("message_str", "") or ""
+        # 去掉前缀 ".setupWP"
+        if raw_args.startswith(('.', '。', '#', '/')):
+            # 找到第一个空格的位置，去掉前缀和命令
+            prefix_match = re.match(r"^[.。#/](\w+)\s*(.*)$", raw_args)
+            if prefix_match:
+                raw_args = prefix_match.group(2)
         
-        # 解析 '键':'值' 格式
-        pattern = r"'([^']+)':[^,']+"
-        matches = re.findall(pattern, raw_args)
+        # 解析参数
+        weapon_data = self._parse_weapon_args(raw_args)
         
-        if not matches:
-            # 尝试解析简单的键值对格式
-            # 格式: 名称:值,类型:值
-            simple_pattern = r"([^:,]+):([^,]+)"
-            simple_matches = re.findall(simple_pattern, raw_args)
-            
-            if simple_matches:
-                # 构建参数列表
-                args = [m[1].strip() for m in simple_matches]
-                result = await self._create_weapon(user_id, args)
-                ctx.send(result)
-            else:
-                ctx.send("用法: .WPsetup '名称':'值','类型':'值',...\n示例: .WPsetup '名称':'激光枪','类型':'火力','伤害':20")
+        if not weapon_data:
+            ctx.send("用法: .setupWP 名称:值,类型:值,...\n类型只支持: 增幅(amplifier)、火力(artillery)、无类型(none)\n示例: .setupWP 名称:激光枪,类型:火力,伤害:20,负重:3.5")
             return True
         
-        # 使用匹配到的值列表
-        # 需要手动解析获取值
-        value_pattern = r"'([^']+)':'?([^',]*)'?"
-        values = re.findall(value_pattern, raw_args)
-        
-        if values:
-            # 将值转换为列表
-            args = [v[1] if v[1] else v[0] for v in values]
-            result = await self._create_weapon(user_id, args)
-            ctx.send(result)
-        else:
-            ctx.send("用法: .WPsetup '名称':'值','类型':'值',...\n示例: .WPsetup '名称':'激光枪','类型':'火力','伤害':20")
+        # 创建武器
+        result = await self._create_weapon_from_data(user_id, weapon_data)
+        ctx.send(result)
         
         return True
+    
+    def _parse_weapon_args(self, args: str) -> Optional[Dict]:
+        """
+        解析武器参数
+        格式: 名称:值,类型:值,...
+        """
+        if not args.strip():
+            return None
+        
+        # 预处理：将中文冒号替换为英文冒号
+        args = args.replace('：', ':')
+        
+        # 解析键值对
+        params = []
+        current_param = ""
+        in_key = True
+        colon_found = False
+        
+        for char in args:
+            if char == ':' and not colon_found:
+                colon_found = True
+                current_param += char
+            elif char == ',' and colon_found:
+                # 值结束，添加参数
+                params.append(current_param.strip())
+                current_param = ""
+                in_key = True
+                colon_found = False
+            else:
+                current_param += char
+                if char == ':':
+                    in_key = False
+        
+        # 添加最后一个参数
+        if current_param.strip():
+            params.append(current_param.strip())
+        
+        # 解析每个参数为键值对
+        weapon_data = {}
+        for param in params:
+            if ':' in param:
+                key_val = param.split(':', 1)
+                if len(key_val) == 2:
+                    key = key_val[0].strip()
+                    value = key_val[1].strip()
+                    
+                    # 转换中文字段名为英文字段名
+                    field_map = {
+                        '名称': 'name',
+                        '名字': 'name',
+                        '类型': 'type',
+                        '增幅属性': 'attribute',
+                        '伤害': 'damage',
+                        '前摇': 'cast',
+                        '射程': 'range',
+                        '载弹量': 'load',
+                        '当前载弹': 'current_load',
+                        '装填时间': 'reload_time',
+                        '负重': 'weight',
+                        '备注': 'note'
+                    }
+                    
+                    field_name = field_map.get(key, key)
+                    
+                    # 尝试转换数值类型
+                    if field_name in ['damage', 'cast', 'range', 'reload_time', 'weight']:
+                        try:
+                            weapon_data[field_name] = float(value) if value else 0
+                        except ValueError:
+                            weapon_data[field_name] = value
+                    elif field_name in ['load', 'current_load']:
+                        try:
+                            weapon_data[field_name] = int(value) if value else 0
+                        except ValueError:
+                            weapon_data[field_name] = value
+                    else:
+                        weapon_data[field_name] = value
+        
+        # 武器类型映射：只支持三种类型
+        # amplifier=增幅, artillery=火力, none=无类型
+        valid_types = {'amplifier', 'artillery', 'none', '增幅', '火力', '无类型'}
+        type_map = {
+            '增幅': 'amplifier',
+            '火力': 'artillery',
+            '无类型': 'none',
+            '无': 'none',
+            '': 'none'
+        }
+        
+        if 'type' in weapon_data:
+            input_type = weapon_data['type'].strip().lower()
+            if input_type in valid_types:
+                weapon_data['type'] = type_map.get(weapon_data['type'], weapon_data['type'])
+            else:
+                # 无效类型，返回None拒绝创建
+                return None
+        
+        # 验证必填字段
+        if 'name' not in weapon_data or not weapon_data['name']:
+            return None
+        
+        return weapon_data
     
     async def wp(self, ctx: CommandContext) -> bool:
         """
@@ -161,7 +254,7 @@ class WeaponModule:
     
     async def _get_character_module(self):
         """获取角色模块"""
-        from trpg.character import character_module
+        from ..character.character import character_module
         return character_module
     
     async def _get_active_character(self, user_id: str) -> Optional[Dict]:
@@ -170,25 +263,67 @@ class WeaponModule:
         return await char_module.get_active_character(user_id)
     
     async def _get_weapons(self, user_id: str) -> List[Dict]:
-        """获取武器列表"""
+        """获取武器列表 - 从角色weapons字段中获取"""
         active_char = await self._get_active_character(user_id)
         if not active_char:
             return []
         
-        char_name = active_char.get('name', '')
-        storage_key = f"{user_id}:{char_name}"
-        
-        return StorageBackend.load_weapons(storage_key)
+        # 从角色的weapons字段中获取武器列表
+        weapons = active_char.get('weapons', [])
+        return weapons
     
     async def _save_weapons(self, user_id: str, weapons: List[Dict]):
-        """保存武器列表"""
+        """保存武器列表 - 通过StorageBackend保存到角色weapons字段中"""
+        from ...infrastructure.storage import StorageBackend
+        
         active_char = await self._get_active_character(user_id)
         if not active_char:
             return
         
-        char_name = active_char.get('name', '')
-        storage_key = f"{user_id}:{char_name}"
-        StorageBackend.save_weapons(storage_key, weapons)
+        # 更新角色的weapons字段
+        active_char['weapons'] = weapons
+        
+        # 通过StorageBackend保存整个角色数据
+        StorageBackend.update_character(user_id, active_char.get('name'), active_char)
+    
+    async def _create_weapon_from_data(self, user_id: str, weapon_data: Dict) -> str:
+        """从参数字典创建武器"""
+        from ...infrastructure.config.game_config import game_config
+        
+        active_char = await self._get_active_character(user_id)
+        if not active_char:
+            return self.reply.render("no_character")
+        
+        # 设置默认值
+        weapon = {
+            'name': weapon_data.get('name', ''),
+            'type': weapon_data.get('type', 'none'),
+            'attribute': weapon_data.get('attribute', ''),
+            'damage': weapon_data.get('damage', 0),
+            'cast': weapon_data.get('cast', 0),
+            'range': weapon_data.get('range', 0),
+            'load': weapon_data.get('load', ''),
+            'current_load': weapon_data.get('current_load', ''),
+            'reload_time': weapon_data.get('reload_time', 0),
+            'weight': weapon_data.get('weight', 0),
+            'note': weapon_data.get('note', ''),
+            'equipped': False
+        }
+        
+        # 处理重量精度
+        if weapon['weight']:
+            weapon['weight'] = game_config.round_value(weapon['weight'], "weight")
+        
+        weapons = await self._get_weapons(user_id)
+        
+        # 如果是第一把武器，自动装备
+        if len(weapons) == 0:
+            weapon['equipped'] = True
+        
+        weapons.append(weapon)
+        await self._save_weapons(user_id, weapons)
+        
+        return self.reply.render("weapon_created", name=active_char.get('name', ''), weapon=weapon['name'])
     
     async def _create_weapon(self, user_id: str, args: List[str]) -> str:
         """创建武器"""
@@ -252,7 +387,9 @@ class WeaponModule:
         
         for i, weapon in enumerate(weapons):
             equipped = "●" if weapon.get('equipped', False) else f"{i+1}"
-            lines.append(f"[{equipped}] {weapon.get('name', '未命名')} - {weapon.get('type', '其他')} ({weapon.get('attribute', '')})")
+            type_display = self._get_type_display(weapon.get('type', ''))
+            weight = weapon.get('weight', 0)
+            lines.append(f"[{equipped}] {weapon.get('name', '未命名')} - {type_display} ({weapon.get('attribute', '')}) 负重:{weight}")
         
         return "\n".join(lines)
     
@@ -270,7 +407,7 @@ class WeaponModule:
         
         lines = [
             f"=== {weapon.get('name', '未命名')} ===",
-            f"类型: {weapon.get('type', '其他')}",
+            f"类型: {self._get_type_display(weapon.get('type', ''))}",
             f"属性: {weapon.get('attribute', '')}",
             f"伤害: {weapon.get('damage', 0)}",
             f"射程: {weapon.get('range', 0)}",

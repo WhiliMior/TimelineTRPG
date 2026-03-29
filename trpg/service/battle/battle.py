@@ -11,12 +11,13 @@
 """
 import time
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
-from ..adapter.storage import StorageBackend
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend
+from ...infrastructure.config.game_config import game_config
 
 # 属性别名配置
 ATTRIBUTE_ALIASES = {
@@ -39,23 +40,20 @@ class BattleModule:
     """
     战斗模块
     
-    支持的指令格式：
+    支持的指令格式（根据老项目设计）：
     - .bt - 显示帮助
-    - .bt new <战斗名> - 创建新战斗
-    - .bt join/in - 加入战斗
-    - .bt leave/out - 离开战斗
-    - .bt ready - 准备/取消准备
-    - .bt start - 开始战斗
-    - .bt end - 结束战斗
-    - .bt status - 查看战斗状态
     - <属性> <时间>t/<影响值> (笔记) - 添加战斗行动
     - wp <时间>t/<影响值> (笔记) - 武器战斗
     - 插入时间t <属性> <时间>t/<影响值> (笔记) - 插入行动
     - undo - 撤销最后行动
+    
+    注意：以下指令已移至 .tl 指令：
+    - new, join/in, leave/out, ready, start, end, status
     """
     
     def __init__(self):
         self.reply = ReplyManager("battle")
+        self.system_reply = ReplyManager("system")
     
     @property
     def help_entry(self) -> HelpEntry:
@@ -67,18 +65,13 @@ class BattleModule:
                 "力量/敏捷等属性 时间t/影响值 (笔记) - 添加战斗行动\n"
                 "wp 时间t/影响值 (笔记) - 使用武器进行战斗\n"
                 "插入时间t 属性 时间t/影响值 (笔记) - 在指定时间插入行动\n"
-                "in - 加入战斗\n"
-                "out - 退出战斗\n"
                 "undo - 撤销最后行动\n"
                 "\n"
                 "增幅武器可以使用t或者数字\n"
                 "火力武器只可以使用数字\n"
                 "其他武器不可以使用指令\n"
                 "\n"
-                "示例:\n"
-                "  力量 5t/10 (备注) → 使用力量属性，5时间，影响值10\n"
-                "  5t 力量 3t/5 → 在5t插入力量行动\n"
-                "  wp 5 → 使用武器，5时间"
+                "注：时间线管理请使用 .tl 指令"
             ),
         )
     
@@ -108,7 +101,7 @@ class BattleModule:
                     insert_time = first_arg
                     attribute = second_arg
                     remaining_args = ctx.args[2:] if len(ctx.args) > 2 else []
-                    result = self._insert_action(storage_key, user_id, insert_time, attribute, remaining_args)
+                    result = await self._insert_action(storage_key, user_id, insert_time, attribute, remaining_args)
                     ctx.send(result)
                     return True
             
@@ -117,92 +110,122 @@ class BattleModule:
                 # 属性命令：属性 时间t/影响值 (笔记)
                 resolved_attr = self._resolve_attribute_name(first_arg)
                 remaining_args = ctx.args[1:] if len(ctx.args) > 1 else []
-                result = self._add_action(storage_key, user_id, resolved_attr, remaining_args)
+                result = await self._add_action(storage_key, user_id, resolved_attr, remaining_args)
                 ctx.send(result)
                 return True
         
         main_command = ctx.args[0].lower()
         
-        if main_command == 'new':
-            if len(ctx.args) < 2:
-                response = self.reply.render("need_battle_name")
-                ctx.send(response)
-                return True
-            battle_name = " ".join(ctx.args[1:])
-            result = self._create_battle(storage_key, user_id, battle_name)
-            ctx.send(result)
+        # 老项目 bt 指令只支持：属性命令、wp命令、undo、插入时间
+        # 以下指令已移至 tl 模块：new, join/in, leave/out, ready, start, end, status
         
-        elif main_command in ('join', 'in'):
-            result = self._join_battle(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command in ('leave', 'out'):
-            result = self._leave_battle(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command == 'ready':
-            result = self._toggle_ready(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command == 'start':
-            result = self._start_battle(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command == 'end':
-            result = self._end_battle(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command == 'status':
-            result = self._battle_status(storage_key)
-            ctx.send(result)
-        
-        elif main_command == 'wp':
+        if main_command == 'wp':
             result = self._weapon_battle(storage_key, user_id, ctx.args[1:] if len(ctx.args) > 1 else [])
             ctx.send(result)
         
         elif main_command == 'undo':
-            result = self._undo_action(storage_key, user_id)
+            result = await self._undo_action(storage_key, user_id)
             ctx.send(result)
         
         elif main_command in ATTRIBUTE_ALIASES or main_command in ATTRIBUTE_ALIASES.values():
             # 属性命令（当只有一个参数时）
             resolved_attr = self._resolve_attribute_name(main_command)
             remaining_args = ctx.args[1:] if len(ctx.args) > 1 else []
-            result = self._add_action(storage_key, user_id, resolved_attr, remaining_args)
+            result = await self._add_action(storage_key, user_id, resolved_attr, remaining_args)
             ctx.send(result)
         
         else:
-            ctx.send(self.reply.render("help"))
+            ctx.send(self.system_reply.render("command_not_found", command=ctx.command))
         
         return True
     
     def _resolve_attribute_name(self, attribute: str) -> str:
         """解析属性名称，使用别名映射"""
         return ATTRIBUTE_ALIASES.get(attribute, attribute)
-    
+
     def _get_battle(self, storage_key: str) -> Dict:
-        battle = StorageBackend.load_battle(storage_key)
-        if not battle.get("battle_list"):
-            battle["battle_list"] = {}
-        return battle
-    
+        """
+        获取当前活跃的战斗对象
+        适配 StorageBackend 的数据结构：{"active_battle_id": xxx, "player": {}, "battle_list": {"xxx": {...}}}
+        """
+        data = StorageBackend.load_battle(storage_key)
+        if not data.get("battle_list"):
+            data["battle_list"] = {}
+
+        # 获取当前活跃的战斗 ID
+        active_battle_id = data.get("active_battle_id")
+
+        # 如果有活跃战斗，返回该战斗对象；否则返回一个新的空战斗对象
+        if active_battle_id and active_battle_id in data["battle_list"]:
+            return data["battle_list"][active_battle_id]
+        else:
+            # 返回一个新的空战斗对象，用于新建战斗
+            return {
+                "status": "idle",
+                "name": None,
+                "creator": None,
+                "participants": {},
+                "ready": [],
+                "timeline": {},
+                "current_time": 0,
+                "max_time": 0,
+                "scheduled_events": []
+            }
+
     def _save_battle(self, storage_key: str, battle: Dict):
-        """保存战斗数据"""
-        StorageBackend.save_battle(storage_key, battle)
+        """
+        保存战斗数据
+        适配 StorageBackend 的数据结构
+        """
+        # 先加载现有数据
+        data = StorageBackend.load_battle(storage_key)
+
+        # 确保数据结构完整
+        if not data.get("battle_list"):
+            data["battle_list"] = {}
+        if "player" not in data:
+            data["player"] = {}
+
+        # 获取当前活跃的战斗 ID
+        active_battle_id = data.get("active_battle_id")
+
+        # 如果当前有活跃战斗，更新它；否则创建新战斗
+        if active_battle_id:
+            data["battle_list"][active_battle_id] = battle
+        else:
+            # 创建新的战斗 ID（使用时间戳）
+            import time
+            new_battle_id = f"battle_{int(time.time())}"
+            data["active_battle_id"] = new_battle_id
+            data["battle_list"][new_battle_id] = battle
+
+        StorageBackend.save_battle(storage_key, data)
+
+    def _set_active_battle(self, storage_key: str, battle_id: str):
+        """设置当前活跃的战斗"""
+        data = StorageBackend.load_battle(storage_key)
+        data["active_battle_id"] = battle_id
+        StorageBackend.save_battle(storage_key, data)
+
+    def _clear_active_battle(self, storage_key: str):
+        """清除当前活跃的战斗"""
+        data = StorageBackend.load_battle(storage_key)
+        data["active_battle_id"] = None
+        StorageBackend.save_battle(storage_key, data)
     
     def _get_character_module(self):
         """获取角色模块"""
-        from trpg.character import character_module
+        from ..character.character import character_module
         return character_module
     
-    def _get_active_character(self, user_id: str) -> Optional[Dict]:
+    async def _get_active_character(self, user_id: str) -> Optional[Dict]:
         """获取用户当前激活的角色"""
         char_module = self._get_character_module()
-        return char_module.get_active_character(user_id)
+        return await char_module.get_active_character(user_id)
     
-    def _get_character_attributes(self, user_id: str, character_name: str) -> Dict[str, float]:
+    async def _get_character_attributes(self, user_id: str, character_name: str) -> Dict[str, float]:
         """获取角色的最终属性值（包含Buff修正）"""
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return {}
         
@@ -224,9 +247,9 @@ class BattleModule:
         
         return attributes
     
-    def _get_final_attribute(self, user_id: str, attribute: str) -> Optional[float]:
+    async def _get_final_attribute(self, user_id: str, attribute: str) -> Optional[float]:
         """获取角色的最终属性值"""
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return None
         
@@ -299,38 +322,71 @@ class BattleModule:
             return time_val, impact_val, None
     
     def _round_value(self, value: float, precision: int = 2) -> float:
-        """根据精度四舍五入"""
+        """根据精度四舍五入（保留本地方法，内部使用统一配置）"""
         return round(value, precision)
     
+    def _format_time(self, value: float) -> Union[int, float]:
+        """格式化时间值"""
+        return game_config.round_value(value, "time")
+    
+    def _format_impact(self, value: float) -> Union[int, float]:
+        """格式化影响值"""
+        return game_config.round_value(value, "impact")
+    
     def _create_battle(self, storage_key: str, user_id: str, name: str) -> str:
-        battle = self._get_battle(storage_key)
-        
-        if battle.get("status", "idle") != "idle":
-            return self.reply.render("battle_already_exists")
-        
-        battle["name"] = name
-        battle["creator"] = user_id
-        battle["status"] = "ready"
-        battle["participants"] = {user_id: {}}
-        
-        self._save_battle(storage_key, battle)
+        """
+        创建新战斗
+        """
+        # 先检查是否已有活跃战斗
+        data = StorageBackend.load_battle(storage_key)
+        active_battle_id = data.get("active_battle_id")
+
+        if active_battle_id and active_battle_id in data.get("battle_list", {}):
+            existing_battle = data["battle_list"][active_battle_id]
+            if existing_battle.get("status") != "idle":
+                return self.reply.render("battle_already_exists")
+
+        # 创建新战斗
+        import time
+        new_battle_id = f"battle_{int(time.time())}"
+
+        new_battle = {
+            "name": name,
+            "creator": user_id,
+            "status": "ready",
+            "participants": {user_id: {}},
+            "ready": [],
+            "timeline": {},
+            "current_time": 0,
+            "max_time": 0,
+            "scheduled_events": []
+        }
+
+        # 保存到数据结构中
+        if "battle_list" not in data:
+            data["battle_list"] = {}
+        data["battle_list"][new_battle_id] = new_battle
+        data["active_battle_id"] = new_battle_id
+
+        StorageBackend.save_battle(storage_key, data)
         return self.reply.render("battle_created", name=name)
     
-    def _join_battle(self, storage_key: str, user_id: str) -> str:
+    async def _join_battle(self, storage_key: str, user_id: str) -> str:
+        """加入战斗"""
         battle = self._get_battle(storage_key)
-        
-        if battle["status"] == "idle":
+
+        if battle.get("status") == "idle":
             return self.reply.render("no_battle")
-        
+
         if user_id in battle["participants"]:
             # 用户已存在，检查是否有角色参与
             if not battle["participants"][user_id]:
                 battle["participants"][user_id] = {}
         else:
             battle["participants"][user_id] = {}
-        
+
         # 获取用户激活的角色并添加到战斗
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if active_char:
             char_name = str(active_char.get('name', '未知角色'))
             if char_name not in battle["participants"][user_id]:
@@ -338,68 +394,86 @@ class BattleModule:
                     "status": "参与中",
                     "last_action_time": 0
                 }
+
+        self._save_battle(storage_key, battle)
+        if active_char:
+            char_name = str(active_char.get('name', '未知角色'))
             return self.reply.render("status_joined", name=char_name)
-        
+
         return self.reply.render("joined_battle")
-    
-    def _leave_battle(self, storage_key: str, user_id: str) -> str:
+
+    async def _leave_battle(self, storage_key: str, user_id: str) -> str:
+        """离开战斗"""
         battle = self._get_battle(storage_key)
-        
+
         if user_id not in battle["participants"] or not battle["participants"][user_id]:
             return self.reply.render("not_in_battle")
-        
+
         # 获取角色名
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if active_char:
             char_name = str(active_char.get('name', '未知角色'))
             if char_name in battle["participants"][user_id]:
                 del battle["participants"][user_id][char_name]
+                self._save_battle(storage_key, battle)
                 return self.reply.render("status_left", name=char_name)
-        
+
+        self._save_battle(storage_key, battle)
         return self.reply.render("left_battle")
-    
+
     def _toggle_ready(self, storage_key: str, user_id: str) -> str:
+        """切换准备状态"""
         battle = self._get_battle(storage_key)
-        
+
         if user_id not in battle["participants"] or not battle["participants"][user_id]:
             return self.reply.render("not_in_battle")
-        
+
+        if "ready" not in battle:
+            battle["ready"] = []
+
         if user_id in battle["ready"]:
             battle["ready"].remove(user_id)
+            self._save_battle(storage_key, battle)
             return self.reply.render("unready")
         else:
             battle["ready"].append(user_id)
+            self._save_battle(storage_key, battle)
             return self.reply.render("ready")
-    
+
     def _start_battle(self, storage_key: str, user_id: str) -> str:
+        """开始战斗"""
         battle = self._get_battle(storage_key)
-        
-        if battle["status"] == "idle":
+
+        if battle.get("status") == "idle":
             return self.reply.render("no_battle")
-        
-        if user_id != battle["creator"]:
+
+        if battle.get("creator") != user_id:
             return self.reply.render("not_creator")
-        
+
         # 至少需要有一个准备好的玩家或者有参与者
-        if len(battle["ready"]) < 1 and len(battle["participants"]) < 1:
+        ready_count = len(battle.get("ready", []))
+        participants_count = len(battle.get("participants", {}))
+        if ready_count < 1 and participants_count < 1:
             return self.reply.render("no_ready_players")
-        
+
         battle["status"] = "active"
         battle["current_time"] = 0
         battle["max_time"] = 0
         battle["timeline"] = {}
-        
+
+        self._save_battle(storage_key, battle)
         return self.reply.render("battle_started")
-    
+
     def _end_battle(self, storage_key: str, user_id: str) -> str:
+        """结束战斗"""
         battle = self._get_battle(storage_key)
-        
-        if battle["status"] == "idle":
+
+        if battle.get("status") == "idle":
             return self.reply.render("no_battle")
-        
-        if user_id != battle["creator"]:
+
+        if battle.get("creator") != user_id:
             return self.reply.render("not_creator")
-        
+
         battle["status"] = "idle"
         battle["name"] = None
         battle["creator"] = None
@@ -409,66 +483,90 @@ class BattleModule:
         battle["current_time"] = 0
         battle["max_time"] = 0
         battle["scheduled_events"] = []
-        
+
+        self._save_battle(storage_key, battle)
+        # 清除活跃战斗ID
+        self._clear_active_battle(storage_key)
         return self.reply.render("battle_ended")
-    
+
     def _battle_status(self, storage_key: str) -> str:
+        """获取战斗状态"""
         battle = self._get_battle(storage_key)
-        
-        if battle["status"] == "idle":
+
+        if battle.get("status") == "idle":
             return self.reply.render("no_battle")
-        
+
+        ready_count = len(battle.get("ready", []))
+        participants_count = len(battle.get("participants", {}))
+
         lines = [
             self.reply.render("battle_status_header", name=battle.get("name", "未命名")),
-            self.reply.render("status_label") + battle["status"],
-            self.reply.render("participants_label") + str(len(battle["participants"])),
-            self.reply.render("ready_label") + str(len(battle["ready"]))
+            self.reply.render("status_label") + battle.get("status", "unknown"),
+            self.reply.render("participants_label") + str(participants_count),
+            self.reply.render("ready_label") + str(ready_count)
         ]
-        
+
         # 如果战斗已激活，显示时间轴
-        if battle["status"] == "active" and battle.get("timeline"):
+        if battle.get("status") == "active" and battle.get("timeline"):
             lines.append("")
-            lines.append(self.reply.render("timeline_current_max_time", 
-                current=battle.get("current_time", 0), 
+            lines.append(self.reply.render("timeline_current_max_time",
+                current=battle.get("current_time", 0),
                 max=battle.get("max_time", 0)))
-        
+
         return "\n".join(lines)
     
-    def _add_action(self, storage_key: str, user_id: str, attribute: str, args: List[str]) -> str:
+    async def _add_action(self, storage_key: str, user_id: str, attribute: str, args: List[str]) -> str:
         """添加战斗行动"""
         battle = self._get_battle(storage_key)
+
+        # 如果没有战斗数据，自动创建一个（兼容 timeline 创建的时间线）
+        if not battle:
+            battle = {
+                "name": "时间线战斗",
+                "status": "active",
+                "participants": {},
+                "timeline": {},
+                "current_time": 0,
+                "max_time": 0,
+                "created_at": self._get_current_time()
+            }
         
-        if battle["status"] != "active":
+        # 如果状态不是 active，设置为 active（兼容 tl new 创建的时间线）
+        if battle.get("status") not in ("active", "ready"):
             return self.reply.render("battle_not_active")
-        
+
         # 获取用户当前激活的角色
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return self.reply.render("no_character")
-        
+
         character_name = str(active_char.get('name', '未知角色'))
-        
+
+        # 确保 participants 存在
+        if "participants" not in battle:
+            battle["participants"] = {}
+
         # 确保用户在参与者列表中
         if user_id not in battle["participants"]:
             battle["participants"][user_id] = {}
-        
+
         if character_name not in battle["participants"][user_id]:
             battle["participants"][user_id][character_name] = {
                 "status": "参与中",
                 "last_action_time": 0
             }
-        
+
         participant = battle["participants"][user_id][character_name]
-        
+
         # 获取属性值
-        attribute_value = self._get_final_attribute(user_id, attribute)
+        attribute_value = await self._get_final_attribute(user_id, attribute)
         if attribute_value is None:
             return self.reply.render("attribute_not_found", attribute=attribute)
-        
+
         # 解析参数
         if not args:
             return self.reply.render("input_error")
-        
+
         time_input = args[0]
         notes = ""
         if len(args) > 1:
@@ -479,17 +577,17 @@ class BattleModule:
                     break
             if not notes and len(args) > 1:
                 notes = ' '.join(args[1:])
-        
+
         # 解析时间输入
         time_val, impact_val, error = self._parse_time_input(time_input, attribute_value)
         if error:
             return self.reply.render("invalid_input")
-        
+
         # 计算行动时间点
         start_time = participant.get('last_action_time', 0)
         new_time_point = start_time + time_val
-        new_time_point = self._round_value(new_time_point)
-        
+        new_time_point = self._format_time(new_time_point)
+
         # 创建行动记录
         action = {
             "user_id": user_id,
@@ -500,91 +598,163 @@ class BattleModule:
             "impact_value": impact_val,
             "notes": notes
         }
-        
+
+        # 确保 timeline 存在
+        if "timeline" not in battle:
+            battle["timeline"] = {}
+
         # 添加到时间轴
         time_str = str(new_time_point)
         if time_str not in battle["timeline"]:
             battle["timeline"][time_str] = []
         battle["timeline"][time_str].append(action)
-        
+
         # 更新参与者最后行动时间
         participant['last_action_time'] = new_time_point
-        
+
         # 更新最大时间
         current_max = battle.get('max_time', 0)
         battle['max_time'] = max(current_max, new_time_point)
-        
+
         # 重新计算当前时间
         self._recalculate_current_time(battle)
+
+        # 保存战斗数据
+        self._save_battle(storage_key, battle)
         
-        # 返回时间轴显示
-        return self._format_timeline_display(battle)
+        # 递减当前角色的计数模式buff事件（在添加新行动之后）
+        self._decrement_count_based_events(storage_key, user_id, character_name)
+        
+        # 执行到期的定时事件
+        executed = self.execute_scheduled_events(storage_key, user_id)
+        
+        # 如果有到期事件，将消息添加到返回结果中
+        timeline_result = self._format_timeline_display(battle)
+        if executed:
+            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
+            return timeline_result + event_msgs
+        
+        return timeline_result
     
-    def _insert_action(self, storage_key: str, user_id: str, insert_time: str, attribute: str, args: List[str]) -> str:
+    def _decrement_count_based_events(self, storage_key: str, user_id: str, character_name: str):
+        """
+        递减指定用户当前角色的计数模式事件的剩余次数
+        包括buff、护盾、资源修饰事件
+        """
+        from ...infrastructure.scheduler import scheduler_module
+        
+        battle = self._get_battle(storage_key)
+        if battle.get("status") != "active":
+            return
+        
+        scheduled_events = battle.get('scheduled_events', [])
+        
+        events_to_remove = []
+        
+        for i, event in enumerate(scheduled_events):
+            # 检查是否为该用户和角色的计数模式事件
+            if (event.get('user_id') == user_id and 
+                event.get('character_name') == character_name and
+                event.get('mode') == 'count_based' and
+                event.get('remaining_count') is not None):
+                
+                # 递减剩余次数
+                event['remaining_count'] -= 1
+                
+                # 检查是否已达到次数限制
+                if event['remaining_count'] <= 0:
+                    events_to_remove.append(i)
+        
+        # 从后往前删除已达到次数限制的事件
+        for i in reversed(events_to_remove):
+            del scheduled_events[i]
+        
+        # 保存数据
+        if events_to_remove:
+            self._save_battle(storage_key, battle)
+    
+    async def _insert_action(self, storage_key: str, user_id: str, insert_time: str, attribute: str, args: List[str]) -> str:
         """在指定时间点插入行动"""
         battle = self._get_battle(storage_key)
+
+        # 如果没有战斗数据，自动创建一个（兼容 timeline 创建的时间线）
+        if not battle:
+            battle = {
+                "name": "时间线战斗",
+                "status": "active",
+                "participants": {},
+                "timeline": {},
+                "current_time": 0,
+                "max_time": 0,
+                "created_at": self._get_current_time()
+            }
         
-        if battle["status"] != "active":
+        # 如果状态不是 active，设置为 active（兼容 tl new 创建的时间线）
+        if battle.get("status") not in ("active", "ready"):
             return self.reply.render("battle_not_active")
-        
+
         # 解析插入时间
         try:
             insert_time_val = float(insert_time.lower().replace('t', ''))
-            insert_time_val = self._round_value(insert_time_val)
+            insert_time_val = self._format_time(insert_time_val)
         except ValueError:
             return self.reply.render("invalid_time_value")
-        
+
         # 验证角色
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return self.reply.render("no_character")
-        
+
         character_name = str(active_char.get('name', '未知角色'))
-        
+
         # 检查属性
-        attribute_value = self._get_final_attribute(user_id, attribute)
+        attribute_value = await self._get_final_attribute(user_id, attribute)
         if attribute_value is None:
             return self.reply.render("attribute_not_found", attribute=attribute)
-        
+
         # 解析参数
         if not args:
             return self.reply.render("input_error")
-        
+
         time_input = args[0]
         notes = ""
         if len(args) > 1:
             notes = ' '.join(args[1:])
-        
+
         # 解析时间输入
         time_val, impact_val, error = self._parse_time_input(time_input, attribute_value)
         if error:
             return self.reply.render("invalid_input")
-        
+
+        # 确保 timeline 存在
+        if "timeline" not in battle:
+            battle["timeline"] = {}
+
         # 检查该时间点是否有正在进行的行动
         found_ongoing = False
-        for time_str, actions in battle['timeline'].items():
+        for time_str, actions in battle.get('timeline', {}).items():
             for action in actions:
                 action_start = float(time_str) - action['lead_time']
                 action_end = float(time_str)
-                
+
                 if action_start < insert_time_val < action_end and action['user_id'] == user_id:
                     # 提前终止原行动
                     elapsed = insert_time_val - action_start
                     completion = elapsed / action['lead_time']
                     completed_impact = action['impact_value'] * completion
-                    action['impact_value'] = self._round_value(completed_impact)
-                    action['lead_time'] = self._round_value(elapsed)
+                    action['impact_value'] = self._format_impact(completed_impact)
+                    action['lead_time'] = self._format_time(elapsed)
                     action['notes'] = "[提前终止] " + action['notes'] if action['notes'] else "[提前终止]"
                     found_ongoing = True
                     break
             if found_ongoing:
                 break
-        
+
         # 添加新行动
         if not found_ongoing:
             new_time_point = insert_time_val + time_val
-            new_time_point = self._round_value(new_time_point)
-            
+            new_time_point = self._format_time(new_time_point)
+
             action = {
                 "user_id": user_id,
                 "character_name": character_name,
@@ -594,7 +764,7 @@ class BattleModule:
                 "impact_value": impact_val,
                 "notes": notes
             }
-            
+
             time_str = str(new_time_point)
             if time_str not in battle["timeline"]:
                 battle["timeline"][time_str] = []
@@ -603,87 +773,141 @@ class BattleModule:
             # 更新参与者最后行动时间
             if user_id in battle["participants"] and character_name in battle["participants"][user_id]:
                 battle["participants"][user_id][character_name]['last_action_time'] = new_time_point
-            
+
             # 更新最大时间
             current_max = battle.get('max_time', 0)
             battle['max_time'] = max(current_max, new_time_point)
-        
+
         # 重新计算当前时间
         self._recalculate_current_time(battle)
+
+        # 保存战斗数据
+        self._save_battle(storage_key, battle)
         
-        return self._format_timeline_display(battle)
+        # 执行到期的定时事件
+        executed = self.execute_scheduled_events(storage_key, user_id)
+        
+        # 如果有到期事件，将消息添加到返回结果中
+        timeline_result = self._format_timeline_display(battle)
+        if executed:
+            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
+            return timeline_result + event_msgs
+        
+        return timeline_result
     
-    def _undo_action(self, storage_key: str, user_id: str) -> str:
+    async def _undo_action(self, storage_key: str, user_id: str) -> str:
         """撤销最后的行动"""
         battle = self._get_battle(storage_key)
-        
-        if battle["status"] != "active":
+
+        if battle.get("status") != "active":
             return self.reply.render("battle_not_active")
-        
+
         # 获取用户当前激活的角色
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return self.reply.render("no_character")
-        
+
         character_name = str(active_char.get('name', '未知角色'))
-        
+
         # 找到该用户该角色的最后一个行动
         last_time_point = None
         last_action_index = -1
         last_action_time_str = None
-        
-        for time_str, actions in battle['timeline'].items():
+
+        timeline = battle.get('timeline', {})
+        for time_str, actions in timeline.items():
             for i, action in enumerate(actions):
-                if (action['user_id'] == user_id and 
+                if (action['user_id'] == user_id and
                     str(action['character_name']) == character_name):
                     current_time = float(time_str) - action['lead_time']
                     if last_time_point is None or current_time > last_time_point:
                         last_time_point = current_time
                         last_action_index = i
                         last_action_time_str = time_str
-        
+
         if last_action_index == -1:
             return self.reply.render("no_action_to_undo")
-        
+
         # 删除行动
-        del battle['timeline'][last_action_time_str][last_action_index]
-        if not battle['timeline'][last_action_time_str]:
-            del battle['timeline'][last_action_time_str]
-        
+        if 'timeline' in battle and last_action_time_str in battle['timeline']:
+            del battle['timeline'][last_action_time_str][last_action_index]
+            if not battle['timeline'][last_action_time_str]:
+                del battle['timeline'][last_action_time_str]
+
         # 重新计算参与者的最后行动时间
         latest_action_time = 0
-        for time_str, actions in battle['timeline'].items():
+        timeline = battle.get('timeline', {})
+        for time_str, actions in timeline.items():
             for action in actions:
-                if (action['user_id'] == user_id and 
+                if (action['user_id'] == user_id and
                     str(action['character_name']) == character_name):
                     action_time = float(time_str) - action['lead_time']
                     latest_action_time = max(latest_action_time, action_time)
-        
-        if user_id in battle['participants'] and character_name in battle['participants'][user_id]:
+
+        participants = battle.get('participants', {})
+        if user_id in participants and character_name in participants[user_id]:
             battle['participants'][user_id][character_name]['last_action_time'] = latest_action_time
-        
+
         # 重新计算max_time和current_time
         max_time = 0
-        for time_str in battle['timeline'].keys():
+        for time_str in timeline.keys():
             time_val = float(time_str)
             max_time = max(max_time, time_val)
-        
-        battle['max_time'] = self._round_value(max_time)
+
+        battle['max_time'] = self._format_time(max_time)
         self._recalculate_current_time(battle)
+
+        # 恢复被撤销的计数模式事件（恢复1次）
+        self._restore_count_based_events(storage_key, user_id, character_name)
         
-        return self.reply.render("action_undone", name=character_name)
+        # 执行到期的定时事件
+        executed = self.execute_scheduled_events(storage_key, user_id)
+        
+        # 保存战斗数据
+        self._save_battle(storage_key, battle)
+        
+        # 返回结果
+        result = self.reply.render("action_undone", name=character_name)
+        if executed:
+            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
+            result += event_msgs
+        return result
+    
+    def _restore_count_based_events(self, storage_key: str, user_id: str, character_name: str):
+        """
+        恢复指定用户当前角色的计数模式事件的剩余次数（在撤销行动时调用）
+        """
+        battle = self._get_battle(storage_key)
+        if battle.get("status") != "active":
+            return
+        
+        scheduled_events = battle.get('scheduled_events', [])
+        
+        for event in scheduled_events:
+            # 检查是否为该用户和角色的计数模式事件
+            if (event.get('user_id') == user_id and 
+                event.get('character_name') == character_name and
+                event.get('mode') == 'count_based' and
+                event.get('remaining_count') is not None):
+                
+                # 恢复剩余次数（增加1）
+                event['remaining_count'] += 1
+        
+        # 保存数据
+        self._save_battle(storage_key, battle)
     
     def _recalculate_current_time(self, battle: Dict):
         """重新计算当前时间（所有角色最后行动时间的最小值）"""
         last_times = []
-        for user_participants in battle['participants'].values():
+        participants = battle.get('participants', {})
+        for user_participants in participants.values():
             for participant_info in user_participants.values():
                 if participant_info.get('status') == '参与中':
                     last_times.append(participant_info.get('last_action_time', 0))
-        
+
         if last_times:
             battle['current_time'] = min(last_times)
-            battle['current_time'] = self._round_value(battle['current_time'])
+            battle['current_time'] = self._format_time(battle['current_time'])
         else:
             battle['current_time'] = 0
     
@@ -697,12 +921,13 @@ class BattleModule:
         sorted_times = sorted([float(t) for t in timeline.keys()])
         
         current_time = battle.get('current_time', 0)
+        max_time = battle.get('max_time', 0)
         
         lines = [
             self.reply.render("timeline_header", name=battle.get('name', '未知战斗')),
             self.reply.render("timeline_current_max_time", 
-                current=current_time, 
-                max=battle.get('max_time', 0))
+                current=self._format_time(current_time), 
+                max=self._format_time(max_time))
         ]
         
         for time_point in sorted_times:
@@ -729,9 +954,13 @@ class BattleModule:
                         continue
                     
                     # 显示行动
+                    start_time = self._format_time(action['start_time'])
+                    lead_time = self._format_time(action['lead_time'])
+                    impact_value = self._format_impact(action['impact_value'])
+                    
                     lines.append(f"  [{action['character_name']}]")
-                    lines.append(f"    起始: {action['start_time']:.1f}t | 前摇: {action['lead_time']:.1f}t")
-                    lines.append(f"    属性: {action['attribute_used']} | 影响: {action['impact_value']:.1f}")
+                    lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
+                    lines.append(f"    属性: {action['attribute_used']} | 影响: {impact_value}")
                     if action.get('notes'):
                         lines.append(f"    {action['notes']}")
         
@@ -768,117 +997,30 @@ class BattleModule:
         """
         调度一个定时事件
         
-        Args:
-            conversation_id: 会话ID
-            user_id: 用户ID
-            character_name: 角色名
-            action_description: 行动描述
-            duration_or_count: 持续时间或生效次数
-            callback_path: 回调函数路径
-            callback_args: 回调函数参数
-            callback_message: 回调执行提示
-            mode: 模式 ('time_based' 或 'count_based')
-        
-        Returns:
-            bool: 是否成功调度
+        委托给 infrastructure.scheduler_module 处理
         """
-        storage_key = conversation_id
-        battle = self._get_battle(storage_key)
-        
-        if battle["status"] != "active":
-            return False
-        
-        # 获取当前时间点
-        current_time = battle.get('current_time', 0)
-        
-        # 创建事件对象
-        event = {
-            'id': f"event_{int(time.time())}_{len(battle.get('scheduled_events', []))}",
-            'event_type': 'buff',
-            'action_description': action_description,
-            'start_time': current_time,
-            'user_id': user_id,
-            'character_name': character_name,
-            'callback_path': callback_path,
-            'callback_args': callback_args,
-            'callback_message': callback_message,
-            'mode': mode
-        }
-        
-        if mode == 'time_based':
-            # 持续时间模式：当前时间 + 持续时间 = 结束时间
-            event['end_time'] = current_time + duration_or_count
-            event['remaining_count'] = None
-        elif mode == 'count_based':
-            # 生效次数模式：记录剩余次数
-            event['remaining_count'] = int(duration_or_count)
-            event['end_time'] = None
-        else:
-            return False
-        
-        # 添加到事件列表
-        if 'scheduled_events' not in battle:
-            battle['scheduled_events'] = []
-        battle['scheduled_events'].append(event)
-        
-        return True
+        from ...infrastructure.scheduler import schedule_event
+        return schedule_event(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            character_name=character_name,
+            action_description=action_description,
+            duration_or_count=duration_or_count,
+            callback_path=callback_path,
+            callback_args=callback_args,
+            callback_message=callback_message,
+            mode=mode,
+            event_type='buff'
+        )
     
     def execute_scheduled_events(self, conversation_id: str, user_id: str = None) -> List[str]:
         """
         执行到期的定时事件
         
-        Args:
-            conversation_id: 会话ID
-            user_id: 用户ID，如果指定则只执行该用户的到期事件
-        
-        Returns:
-            List[str]: 执行结果消息列表
+        委托给 infrastructure.scheduler_module 处理
         """
-        storage_key = conversation_id
-        battle = self._get_battle(storage_key)
-        
-        if battle["status"] != "active":
-            return []
-        
-        current_time = battle.get('current_time', 0)
-        scheduled_events = battle.get('scheduled_events', [])
-        
-        executed_messages = []
-        events_to_remove = []
-        
-        for i, event in enumerate(scheduled_events):
-            # 检查是否为时间模式且已到期
-            if (event.get('mode') == 'time_based' and 
-                event.get('end_time') is not None and 
-                current_time >= event.get('end_time', 0)):
-                
-                # 如果指定了用户ID，只执行该用户的事件
-                if user_id is not None and event.get('user_id') != user_id:
-                    continue
-                
-                # 执行回调
-                if 'callback_path' in event and event['callback_path']:
-                    try:
-                        # 解析回调路径
-                        callback_path = event['callback_path']
-                        callback_args = event.get('callback_args', {})
-                        
-                        if callback_path == "trpg.buff.remove_expired_buff":
-                            from trpg.buff import remove_expired_buff
-                            remove_expired_buff(**callback_args)
-                            executed_messages.append(event.get('callback_message', ''))
-                    except Exception as e:
-                        print(f"Error executing scheduled event callback: {e}")
-                
-                # 标记为删除
-                events_to_remove.append(i)
-        
-        # 从后往前删除已执行的事件
-        for i in reversed(events_to_remove):
-            if i < len(scheduled_events):
-                del scheduled_events[i]
-        
-        return executed_messages
+        from ...infrastructure.scheduler import execute_scheduled_events
+        return execute_scheduled_events(conversation_id, user_id)
 
 
 battle_module = BattleModule()

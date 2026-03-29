@@ -9,9 +9,9 @@
 """
 from typing import Dict, Optional
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
 
 
 class LevelModule:
@@ -37,13 +37,7 @@ class LevelModule:
                 "- 查询当前等级\n"
                 "{等级} - 设置等级\n"
                 "+{数值} - 增加等级\n"
-                "-{数值} - 减少等级\n"
-                "\n"
-                "示例:\n"
-                "  lv → 查询当前等级\n"
-                "  lv 10 → 设置等级为10\n"
-                "  lv +1 → 等级+1\n"
-                "  lv -2 → 等级-2"
+                "-{数值} - 减少等级"
             ),
         )
     
@@ -84,7 +78,7 @@ class LevelModule:
     
     async def _get_character_module(self):
         """获取角色模块"""
-        from trpg.character import character_module
+        from ..character.character import character_module
         return character_module
     
     async def _get_active_character(self, user_id: str) -> Optional[Dict]:

@@ -1,10 +1,14 @@
 """
 回复管理器模块，负责从 JSON 文件中加载回复模板并渲染变量。
 提供 ReplyPayload 数据类，用于封装回复数据，不涉及实际发送逻辑。
+
+迁移自 adapter/reply.py -> trpg/adapter/message.py
 """
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
+
 
 @dataclass
 class ReplyPayload:
@@ -56,9 +60,9 @@ class ReplyManager:
     @classmethod
     def _load_config(cls):
         """从 config/replies.json 加载模板配置"""
-        # __file__ = adapter/reply.py，需要两级 dirname 才能到达插件根目录
-        plugin_root = os.path.dirname(os.path.dirname(__file__))
-        config_path = os.path.join(plugin_root, "config", "replies.json")
+        # __file__ = trpg/adapter/message.py，需要三级 dirname 才能到达插件根目录
+        plugin_root = Path(__file__).parent.parent.parent
+        config_path = plugin_root / "trpg" / "infrastructure" / "config" / "replies.json"
         
         try:
             with open(config_path, "r", encoding="utf-8") as f:

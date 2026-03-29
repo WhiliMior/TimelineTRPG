@@ -6,31 +6,24 @@ Buff模块 - 管理角色增益/减益效果
 - 添加/移除 Buff
 - 与战斗系统集成（定时事件）
 - 与角色系统集成（属性修正）
+
+数据存储：
+- Buff数据存储在角色的 buffs 字段中
+- 与老项目 TimelineBot 的数据存储方式完全一致
 """
 import re
+import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
-from ..adapter.storage import StorageBackend, StorageType
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend, StorageType
+from ...infrastructure.attribute_resolver import AttributeResolver
 
-# 属性别名配置
-ATTRIBUTE_ALIASES = {
-    "力量": "力量",
-    "str": "力量",
-    "敏捷": "敏捷",
-    "dex": "敏捷",
-    "体质": "体质",
-    "con": "体质",
-    "智力": "智力",
-    "int": "智力",
-    "感知": "感知",
-    "wis": "感知",
-    "魅力": "魅力",
-    "cha": "魅力",
-}
+# Buff类型常量
+VALID_BUFF_TYPES = {"直接加算", "直接乘算", "最终加算", "最终乘算"}
 
 
 class BuffModule:
@@ -39,7 +32,7 @@ class BuffModule:
     
     支持的指令格式：
     - .buff - 显示buff列表
-    - .buff add <属性> <类型> <数值> [持续时间] - 添加buff
+    - .buff add <名称> <属性> <类型> <数值> [持续时间] - 添加buff
     - .buff del <序号> - 删除指定buff
     - .buff del all - 删除所有buff
     - .buff show [属性] - 显示buff详情
@@ -56,15 +49,9 @@ class BuffModule:
             summary="Buff增益管理",
             detail=(
                 "- 显示buff列表\n"
-                "add {属性} {类型} {数值} (持续时间) - 添加buff\n"
+                "add {名称} {属性} {类型} {数值} (持续时间) - 添加buff\n"
                 "show (覆盖范围) - 查看所有Buff或对范围生效的Buff\n"
-                "del {序号}/all - 移除Buff\n"
-                "\n"
-                "示例:\n"
-                "  buff add 力量 永久 5 → 添加力量属性永久buff，数值5\n"
-                "  buff add 敏捷 临时 3 3t → 添加敏捷临时buff，数值3，持续3时间\n"
-                "  buff del 1 → 删除第1个buff\n"
-                "  buff del all → 删除所有buff"
+                "del {序号}/all - 移除Buff"
             ),
         )
     
@@ -74,25 +61,25 @@ class BuffModule:
         """
         user_id = ctx.sender_id or "default"
         conversation_id = ctx.group_id or ctx.session_id or user_id
-        storage_key = f"{user_id}:{conversation_id}"
         
         if not ctx.args:
             # 没有参数，显示所有buff
-            result = self._list_buffs(storage_key)
+            result = await self._list_buffs(user_id)
             ctx.send(result)
             return True
         
         command = ctx.args[0].lower()
         
-        if command == 'add' and len(ctx.args) >= 4:
-            # .buff add {属性} {类型} {数值} [持续时间]
-            attribute = ctx.args[1]
-            buff_type = ctx.args[2]
-            value_str = ctx.args[3]
+        if command == 'add' and len(ctx.args) >= 5:
+            # .buff add {名称} {属性} {类型} {数值} [持续时间]
+            buff_name = ctx.args[1]
+            attribute = ctx.args[2]
+            buff_type = ctx.args[3]
+            value_str = ctx.args[4]
             
             duration = None
-            if len(ctx.args) >= 5:
-                duration_input = ctx.args[4]
+            if len(ctx.args) >= 6:
+                duration_input = ctx.args[5]
                 if duration_input != '0' and duration_input != '0t':
                     try:
                         if duration_input.endswith('t'):
@@ -113,17 +100,33 @@ class BuffModule:
                 ctx.send(response)
                 return True
             
-            result = self._add_buff(storage_key, user_id, conversation_id, attribute, buff_type, value, duration)
+            # 验证buff类型
+            if buff_type not in VALID_BUFF_TYPES:
+                response = self.reply.render("invalid_buff_type")
+                ctx.send(response)
+                return True
+            
+            # 验证属性是否合法（使用 AttributeResolver）
+            if not AttributeResolver.is_valid(attribute):
+                valid_inputs = ", ".join(AttributeResolver.get_all_valid_inputs()[:10])
+                response = f"无效的属性名：{attribute}\n有效的属性包括：{valid_inputs}..."
+                ctx.send(response)
+                return True
+            
+            # 解析为标准属性名，确保反馈时显示原名
+            resolved_attribute = AttributeResolver.resolve(attribute)
+            
+            result = await self._add_buff(user_id, conversation_id, buff_name, resolved_attribute, buff_type, value, duration)
             ctx.send(result)
         
         elif command == 'del' and len(ctx.args) >= 2:
             if ctx.args[1].lower() == 'all':
-                result = self._remove_all_buffs(storage_key, user_id)
+                result = await self._remove_all_buffs(user_id)
                 ctx.send(result)
             else:
                 try:
                     index = int(ctx.args[1])
-                    result = self._remove_buff_by_index(storage_key, user_id, index)
+                    result = await self._remove_buff_by_index(user_id, index)
                     ctx.send(result)
                 except ValueError:
                     response = self.reply.render("invalid_number")
@@ -132,44 +135,58 @@ class BuffModule:
         elif command == 'show':
             if len(ctx.args) >= 2:
                 attribute = ctx.args[1]
-                result = self._list_buffs(storage_key, attribute)
+                result = await self._list_buffs(user_id, attribute)
             else:
-                result = self._list_buffs(storage_key)
+                result = await self._list_buffs(user_id)
             ctx.send(result)
         
         else:
-            result = self._list_buffs(storage_key)
+            result = await self._list_buffs(user_id)
             ctx.send(result)
         
         return True
     
     def _resolve_attribute_name(self, attribute: str) -> str:
-        """解析属性名称，使用别名映射"""
-        return ATTRIBUTE_ALIASES.get(attribute, attribute)
+        """解析属性名称，使用统一的 AttributeResolver"""
+        resolved = AttributeResolver.resolve(attribute)
+        return resolved if resolved else attribute
     
     def _get_character_module(self):
         """获取角色模块"""
-        from trpg.character import character_module
+        from ..character.character import character_module
         return character_module
     
-    def _get_active_character(self, user_id: str) -> Optional[Dict]:
+    async def _get_active_character(self, user_id: str) -> Optional[Dict]:
         """获取用户当前激活的角色"""
         char_module = self._get_character_module()
-        return char_module.get_active_character(user_id)
+        return await char_module.get_active_character(user_id)
     
-    def _get_buffs(self, storage_key: str) -> List[Dict]:
-        """获取buff列表"""
-        return StorageBackend.load(StorageType.USER, storage_key, default=[])
+    async def _get_buffs(self, user_id: str) -> List[Dict]:
+        """获取buff列表 - 从角色buffs字段中获取"""
+        active_char = await self._get_active_character(user_id)
+        if not active_char:
+            return []
+        return active_char.get('buffs', [])
     
-    def _save_buffs(self, storage_key: str, buffs: List[Dict]):
-        """保存buff列表"""
-        StorageBackend.save(StorageType.USER, storage_key, buffs)
+    async def _save_buffs(self, user_id: str, buffs: List[Dict]):
+        """保存buff列表 - 通过StorageBackend保存到角色buffs字段中"""
+        from ...infrastructure.storage import StorageBackend
+        
+        active_char = await self._get_active_character(user_id)
+        if not active_char:
+            return
+        
+        # 更新角色的buffs字段
+        active_char['buffs'] = buffs
+        
+        # 通过StorageBackend保存整个角色数据
+        StorageBackend.update_character(user_id, active_char.get('name'), active_char)
     
-    def _add_buff(self, storage_key: str, user_id: str, conversation_id: str, 
-                  attribute: str, buff_type: str, value: float, duration) -> str:
+    async def _add_buff(self, user_id: str, conversation_id: str, 
+                        buff_name: str, attribute: str, buff_type: str, value: float, duration) -> str:
         """添加buff"""
         # 检查角色
-        active_char = self._get_active_character(user_id)
+        active_char = await self._get_active_character(user_id)
         if not active_char:
             return self.reply.render("no_character")
         
@@ -184,19 +201,19 @@ class BuffModule:
         if resolved_attribute not in char_data:
             return self.reply.render("attribute_not_found", attribute=resolved_attribute)
         
-        buffs = self._get_buffs(storage_key)
+        buffs = await self._get_buffs(user_id)
         
         buff = {
+            "name": buff_name,
             "attribute": resolved_attribute,
             "type": buff_type,
             "value": value,
             "duration": duration,
-            "created_at": datetime.now().isoformat(),
-            "character_name": character_name
+            "created_at": datetime.now().isoformat()
         }
         
         buffs.append(buff)
-        self._save_buffs(storage_key, buffs)
+        await self._save_buffs(user_id, buffs)
         
         # 如果有持续时间，调度战斗事件
         if duration is not None:
@@ -205,15 +222,15 @@ class BuffModule:
                                     resolved_attribute, buff_type, value, duration)
         
         duration_str = "永久" if duration is None else str(duration)
-        return self.reply.render("buff_added", attribute=resolved_attribute, value=value, duration=duration_str)
+        return self.reply.render("buff_added", name=buff_name, attribute=resolved_attribute, type=buff_type, value=value, duration=duration_str)
     
     def _schedule_buff_event(self, conversation_id: str, user_id: str, character_name: str,
                            attribute: str, buff_type: str, buff_value: float, duration):
         """
         调度buff事件
         """
-        # 导入战斗模块
-        from trpg.battle import battle_module
+        # 使用 infrastructure scheduler 避免循环引用
+        from ...infrastructure.scheduler import schedule_event
         
         # 确定模式
         mode = 'time_based' if (isinstance(duration, str) and duration.endswith('t')) else 'count_based'
@@ -222,14 +239,14 @@ class BuffModule:
         # 构建描述
         action_desc = f"{character_name} Buff{buff_type} {attribute}{buff_value:+g}"
         
-        # 调用战斗系统调度事件
-        battle_module.schedule_buff_event(
+        # 调用 scheduler 调度事件
+        schedule_event(
             conversation_id=conversation_id,
             user_id=user_id,
             character_name=character_name,
             action_description=action_desc,
             duration_or_count=duration_value,
-            callback_path=f"trpg.buff.remove_expired_buff",
+            callback_path=f"trpg.service.buff.buff.remove_expired_buff",
             callback_args={
                 "user_id": user_id,
                 "attribute": attribute,
@@ -237,19 +254,20 @@ class BuffModule:
                 "buff_value": buff_value
             },
             callback_message=f"{character_name} Buff{buff_type} {attribute}{buff_value:+g} 已到期",
-            mode=mode
+            mode=mode,
+            event_type='buff'
         )
     
-    def _remove_buff(self, storage_key: str, attribute: Optional[str]) -> str:
+    async def _remove_buff(self, user_id: str, attribute: Optional[str]) -> str:
         """删除buff（按属性名）"""
-        buffs = self._get_buffs(storage_key)
+        buffs = await self._get_buffs(user_id)
         
         if not buffs:
             return self.reply.render("no_buffs")
         
         if attribute is None:
             # 删除所有
-            self._save_buffs(storage_key, [])
+            await self._save_buffs(user_id, [])
             return self.reply.render("all_buffs_removed")
         
         # 删除指定属性的buff
@@ -259,12 +277,12 @@ class BuffModule:
         if len(buffs) == original_count:
             return self.reply.render("buff_not_found", attribute=attribute)
         
-        self._save_buffs(storage_key, buffs)
+        await self._save_buffs(user_id, buffs)
         return self.reply.render("buff_removed", attribute=attribute)
     
-    def _remove_buff_by_index(self, storage_key: str, user_id: str, index: int) -> str:
+    async def _remove_buff_by_index(self, user_id: str, index: int) -> str:
         """按索引删除buff"""
-        buffs = self._get_buffs(storage_key)
+        buffs = await self._get_buffs(user_id)
         
         if not buffs:
             return self.reply.render("no_buffs")
@@ -273,23 +291,23 @@ class BuffModule:
             return self.reply.render("invalid_index")
         
         removed = buffs.pop(index - 1)
-        self._save_buffs(storage_key, buffs)
+        await self._save_buffs(user_id, buffs)
         
         return self.reply.render("buff_removed_by_index", index=index, attribute=removed.get('attribute', ''))
     
-    def _remove_all_buffs(self, storage_key: str, user_id: str) -> str:
+    async def _remove_all_buffs(self, user_id: str) -> str:
         """删除所有buff"""
-        buffs = self._get_buffs(storage_key)
+        buffs = await self._get_buffs(user_id)
         
         if not buffs:
             return self.reply.render("no_buffs")
         
-        self._save_buffs(storage_key, [])
+        await self._save_buffs(user_id, [])
         return self.reply.render("all_buffs_removed")
     
-    def _list_buffs(self, storage_key: str, attribute: Optional[str] = None) -> str:
+    async def _list_buffs(self, user_id: str, attribute: Optional[str] = None) -> str:
         """显示buff列表"""
-        buffs = self._get_buffs(storage_key)
+        buffs = await self._get_buffs(user_id)
         
         if not buffs:
             return self.reply.render("no_buffs")
@@ -304,11 +322,12 @@ class BuffModule:
         lines = [self.reply.render("buff_list_header")]
         
         for i, buff in enumerate(buffs):
+            name = buff.get('name', '')
             attr = buff.get('attribute', '')
             btype = buff.get('type', '')
             val = buff.get('value', 0)
             dur = buff.get('duration', '永久')
-            lines.append(f"[{i + 1}] {attr} {btype} {val} 持续: {dur}")
+            lines.append(f"[{i + 1}] {name} {attr} {btype} {val} 持续: {dur}")
         
         return "\n".join(lines)
     
@@ -317,8 +336,7 @@ class BuffModule:
         获取角色指定属性的Buff修正值
         用于与角色属性系统集成
         """
-        storage_key = f"{user_id}"
-        buffs = self._get_buffs(storage_key)
+        buffs = asyncio.run(self._get_buffs(user_id))
         
         total_modifier = 0.0
         for buff in buffs:
@@ -328,13 +346,28 @@ class BuffModule:
         return total_modifier
 
 
+# 用于存储正在等待保存的角色数据（避免并发问题）
+_pending_character_saves: Dict[str, asyncio.Lock] = {}
+
+
 def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value: float) -> bool:
     """
     模块级函数，用于移除过期的buff
     由战斗系统在定时事件触发时调用
+    
+    修改为从角色的buffs字段中读取和保存数据，与老项目一致
     """
-    storage_key = f"{user_id}"
-    buffs = StorageBackend.load(StorageType.USER, storage_key, default=[])
+    from ..character.character import character_module
+    
+    # 获取角色模块
+    char_module = character_module
+    
+    # 获取当前激活的角色
+    active_char = char_module.get_active_character(user_id)
+    if not active_char:
+        return False
+    
+    buffs = active_char.get('buffs', [])
     
     if not buffs:
         return False
@@ -348,7 +381,23 @@ def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value
     )]
     
     if len(buffs) < original_count:
-        StorageBackend.save(StorageType.USER, storage_key, buffs)
+        # 更新并保存角色数据
+        active_char['buffs'] = buffs
+        
+        # 保存角色数据
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            characters = loop.run_until_complete(char_module._get_user_characters(user_id))
+            for i, char in enumerate(characters):
+                if char.get('name') == active_char.get('name'):
+                    characters[i] = active_char
+                    break
+            loop.run_until_complete(char_module._save_characters(user_id, characters))
+        finally:
+            loop.close()
+        
         return True
     
     return False

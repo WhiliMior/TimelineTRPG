@@ -1,11 +1,13 @@
 """
 路由器模块，提供配置表驱动的指令分发功能。
 通过 ROUTES 字典注册指令到处理函数，新增指令只需加一行配置。
+
+这是外部适配层 (adapter/)，仅负责消息路由
 """
 import logging
 from typing import Callable, Any
 import inspect
-from .command_context import CommandContext
+from ..trpg.adapter.command_context import CommandContext
 
 # 创建 adapter 层专用的 logger
 logger = logging.getLogger("TimelineTRPG.adapter")

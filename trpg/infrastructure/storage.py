@@ -66,7 +66,9 @@ class StorageBackend:
         Returns:
             实体目录路径
         """
-        entity_dir = cls._get_base_dir(storage_type) / entity_id
+        # 替换 Windows 不允许的路径字符
+        safe_entity_id = entity_id.replace(":", "_").replace("/", "_").replace("\\", "_")
+        entity_dir = cls._get_base_dir(storage_type) / safe_entity_id
         entity_dir.mkdir(parents=True, exist_ok=True)
         return entity_dir
     
@@ -344,71 +346,93 @@ class StorageBackend:
     # ==================== 谈判数据快捷方法 ====================
     
     @classmethod
-    def load_negotiation(cls, conversation_id: str = None) -> Dict:
+    def load_negotiation(cls, conversation_id: str = None, session_type: str = "private") -> Dict:
         """
         加载谈判数据
         
         Args:
             conversation_id: 可选的会话ID，如果提供则返回该会话的数据
+            session_type: 会话类型，"group" 或 "private"
         
         Returns:
             谈判数据
         """
-        data = cls.load_global(StorageType.EXAMINATION, "negotiation.json", default={})
+        data = cls.load_global(StorageType.EXAMINATION, "negotiation.json", default={"group": {}, "private": {}})
+        
+        # 确保结构存在
+        if session_type not in data:
+            data[session_type] = {}
         
         if conversation_id:
-            return data.get(conversation_id, {})
+            return data.get(session_type, {}).get(conversation_id, {})
         return data
     
     @classmethod
-    def save_negotiation(cls, conversation_id: str, negotiation_data: Dict) -> bool:
+    def save_negotiation(cls, conversation_id: str, negotiation_data: Dict, session_type: str = "private") -> bool:
         """
         保存谈判数据
         
         Args:
             conversation_id: 会话ID
             negotiation_data: 谈判数据
+            session_type: 会话类型，"group" 或 "private"
         
         Returns:
             保存是否成功
         """
-        data = cls.load_global(StorageType.EXAMINATION, "negotiation.json", default={})
-        data[conversation_id] = negotiation_data
+        data = cls.load_global(StorageType.EXAMINATION, "negotiation.json", default={"group": {}, "private": {}})
+        
+        # 确保结构存在
+        if session_type not in data:
+            data[session_type] = {}
+        
+        data[session_type][conversation_id] = negotiation_data
         return cls.save_global(StorageType.EXAMINATION, "negotiation.json", data)
     
     # ==================== 目标数据快捷方法 ====================
     
     @classmethod
-    def load_target(cls, conversation_id: str = None) -> Dict:
+    def load_target(cls, conversation_id: str = None, session_type: str = "private") -> Dict:
         """
         加载目标数据
         
         Args:
             conversation_id: 可选的会话ID
+            session_type: 会话类型，"group" 或 "private"
         
         Returns:
             目标数据
         """
-        data = cls.load_global(StorageType.EXAMINATION, "target.json", default={})
+        data = cls.load_global(StorageType.EXAMINATION, "target.json", default={"group": {}, "private": {}})
+        
+        # 确保结构存在
+        if session_type not in data:
+            data[session_type] = {}
         
         if conversation_id:
-            return data.get(conversation_id, {})
+            return data.get(session_type, {}).get(conversation_id, {})
         return data
     
     @classmethod
-    def save_target(cls, conversation_id: str, target_data: Dict) -> bool:
+    def save_target(cls, conversation_id: str, target_data: Dict, session_type: str = "private") -> bool:
         """
         保存目标数据
         
         Args:
             conversation_id: 会话ID
             target_data: 目标数据
+            session_type: 会话类型，"group" 或 "private"
         
         Returns:
             保存是否成功
         """
-        data = cls.load_global(StorageType.EXAMINATION, "target.json", default={})
-        data[conversation_id] = target_data
+        data = cls.load_global(StorageType.EXAMINATION, "target.json", default={"group": {}, "private": {}})
+        
+        # 确保结构存在
+        if session_type not in data:
+            data[session_type] = {}
+        
+        data[session_type][conversation_id] = target_data
         return cls.save_global(StorageType.EXAMINATION, "target.json", data)
     
     # ==================== 武器数据快捷方法 ====================

@@ -11,26 +11,25 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
 # 导入 adapter 层（使用相对导入，与 qq_group_daily_analysis 保持一致）
-from .adapter.command_context import CommandContext
+from .trpg.adapter.command_context import CommandContext
 from .adapter.router import Router
-from .adapter.reply import ReplyManager
-from .adapter.help import HelpEntry, HelpRegistry
+from .trpg.adapter.message import ReplyManager
+from .trpg.infrastructure.help import HelpEntry, HelpRegistry
 
-# 导入业务模块（使用相对导入）
-from .trpg.echo import echo_module
-from .trpg.roll_dice import roll_dice_module
-from .trpg.examination import examination_module
-from .trpg.target import target_module
-from .trpg.character import character_module
-from .trpg.buff import buff_module
-from .trpg.resource_modifier import resource_modifier_module
-from .trpg.negotiation import negotiation_module
-from .trpg.timeline import timeline_module
-from .trpg.battle import battle_module
-from .trpg.inventory import inventory_module
-from .trpg.resource_record import resource_record_module
-from .trpg.weapon import weapon_module
-from .trpg.level import level_module
+# 导入业务模块（使用新的服务层路径）
+from .trpg.service.dice.dice import roll_dice_module
+from .trpg.service.examination.examination import examination_module
+from .trpg.service.examination.target import target_module
+from .trpg.service.character.character import character_module
+from .trpg.service.buff.buff import buff_module
+from .trpg.service.resource.modifier import resource_modifier_module
+from .trpg.service.negotiation.negotiation import negotiation_module
+from .trpg.service.battle.timeline import timeline_module
+from .trpg.service.battle.battle import battle_module
+from .trpg.service.inventory.inventory import inventory_module
+from .trpg.service.resource.resource import resource_record_module
+from .trpg.service.weapon.weapon import weapon_module
+from .trpg.service.level.level import level_module
 
 # 插件信息
 PLUGIN_NAME = "TimelineTRPG"
@@ -55,7 +54,6 @@ class TimelineTRPG(Star):
             router=self.router  # 传递 Router 实例，用于动态获取指令前缀
         )
         self.module_instances: list = []
-        self.module_instances.append(echo_module)
         self.module_instances.append(roll_dice_module)
         self.module_instances.append(examination_module)
         self.module_instances.append(target_module)
@@ -77,28 +75,26 @@ class TimelineTRPG(Star):
     def _setup_routes(self):
         """配置指令路由表"""
         # 注册子模块指令
-        self.router.register("echo", self._wrap_with_sub_help(echo_module, "echo"))
         self.router.register("r", self._wrap_with_sub_help(roll_dice_module, "r"))
         self.router.register("ex", self._wrap_with_sub_help(examination_module, "ex"))
         self.router.register("tar", self._wrap_with_sub_help(target_module, "tar"))
         self.router.register("chr", self._wrap_with_sub_help(character_module, "chr"))
+        self.router.register("char", self._wrap_with_sub_help(character_module, "chr"))  # 老项目别名
         self.router.register("buff", self._wrap_with_sub_help(buff_module, "buff"))
         self.router.register("dr", self._wrap_with_sub_help(resource_modifier_module, "dr"))
+        self.router.register("resmod", self._wrap_with_sub_help(resource_modifier_module, "dr"))  # 老项目别名
         self.router.register("neg", self._wrap_with_sub_help(negotiation_module, "neg"))
         self.router.register("tl", self._wrap_with_sub_help(timeline_module, "tl"))
         self.router.register("bt", self._wrap_with_sub_help(battle_module, "bt"))
         self.router.register("i", self._wrap_with_sub_help(inventory_module, "i"))
         self.router.register("rc", self._wrap_with_sub_help(resource_record_module, "rc"))
         self.router.register("wp", self._wrap_with_sub_help(weapon_module, "wp"))
-        self.router.register("WPsetup", self._wrap_with_sub_help(weapon_module, "wp_setup"))
+        self.router.register("setupWP", self._wrap_with_sub_help(weapon_module, "wp_setup"))
         self.router.register("lv", self._wrap_with_sub_help(level_module, "lv"))
         
         # 注册角色创建指令
         self.router.register("tlsetup", self._wrap_with_sub_help(character_module, "tlsetup"))
-        
-        # 这里可以注册更多指令
-        # self.router.register("ex", self._wrap_with_sub_help(character_module, "ex"))
-        # self.router.register("stat", self._wrap_with_sub_help(character_module, "stat"))
+        self.router.register("TLsetup", self._wrap_with_sub_help(character_module, "tlsetup"))  # 大写别名
         
         # 注册 help 指令
         self.router.register("help", self._handle_help)
@@ -170,26 +166,26 @@ class TimelineTRPG(Star):
         ctx.send(detail)
         return True
     
-    @filter.regex(r"^\.(\w+)\b")
+    @filter.regex(r"^[.。#/](\w+)\b")
     async def trpg_command_handler(self, event: AstrMessageEvent) -> Generator[MessageEventResult, None, None]:
         """
         TRPG 指令统一入口
-        匹配所有 .开头的指令，如 .echo, .help 等
+        匹配所有 .。#/ 开头的指令，如 .help, 。r, #bt 等
         
         数据流：
-        1. 匹配 ".指令" 格式
+        1. 匹配 ".指令" 格式（支持 . 。 # / 四种前缀）
         2. 创建 CommandContext
         3. 通过 Router 分发到对应业务模块
         4. 将 ReplyPayload 转换为 event.plain_result()
         """
         message_str = event.message_str.strip()
         
-        match = re.match(r"^\.(\w+)\b\s*(.*)$", message_str)
+        match = re.match(r"^[.。#/](\w+)\b\s*(.*)$", message_str)
         if not match:
             yield event.plain_result("指令格式错误")
             return
         
-        command = match.group(1).lower()
+        command = match.group(1)  # 保留原始大小写
         args_str = match.group(2).strip()
         args = await self._parse_args(args_str)
         

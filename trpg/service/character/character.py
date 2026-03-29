@@ -5,10 +5,10 @@
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
-from ..adapter.storage import StorageBackend
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend
 
 
 class CharacterModule:
@@ -27,6 +27,7 @@ class CharacterModule:
     
     def __init__(self):
         self.reply = ReplyManager("character")
+        self.system_reply = ReplyManager("system")
     
     @property
     def help_entry(self) -> HelpEntry:
@@ -35,24 +36,14 @@ class CharacterModule:
             usage="[序号|show|del]",
             summary="角色管理",
             detail=(
-                "角色管理 (.chr)\n"
+                "角色管理\n"
                 "- 显示角色列表\n"
                 "show - 查看角色参数\n"
                 "{序号} - 切换角色\n"
                 "del {序号} - 删除角色\n"
                 "\n"
-                "示例:\n"
-                "  chr → 显示角色列表\n"
-                "  chr 1 → 选择第1个角色\n"
-                "  chr show → 显示角色详情\n"
-                "  chr del 2 → 删除第2个角色\n"
-                "\n"
                 "创建角色 (.tlsetup)\n"
-                "格式: .tlsetup 名称:xxx,属性:值,...\n"
-                "\n"
-                "示例:\n"
-                "  .tlsetup 名称:勇者,力量:10,敏捷:8,体质:12,智力:9\n"
-                "  .tlsetup name:Hero,STR:10,DEX:8"
+                "格式: .tlsetup 名称:xxx,属性:值,..."
             ),
         )
     
@@ -64,12 +55,7 @@ class CharacterModule:
             summary="创建角色",
             detail=(
                 "创建新角色\n"
-                "\n"
-                "格式: .tlsetup 名称:xxx,属性:值,...\n"
-                "\n"
-                "示例:\n"
-                "  .tlsetup 名称:勇者,力量:10,敏捷:8,体质:12,智力:9,感知:7,魅力:11,等级:1\n"
-                "  .tlsetup name:Hero,STR:10,DEX:8,CON:12,INT:9,WIS:7,CHA:11"
+                "格式: .tlsetup 名称:xxx,属性:值,..."
             ),
         )
 
@@ -253,7 +239,7 @@ class CharacterModule:
                 response = self.reply.render("index_must_be_number")
                 ctx.send(response)
         else:
-            response = self.reply.render("unknown_character_command")
+            response = self.system_reply.render("command_not_found", command=ctx.command)
             ctx.send(response)
         
         return True

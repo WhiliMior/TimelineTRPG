@@ -1,10 +1,12 @@
 """
 指令上下文模块，提供 CommandContext 类封装指令执行的上下文信息。
 业务模块通过 ctx.send() 方法添加回复载荷，不实际发送消息。
+
+迁移自 adapter/command_context.py -> trpg/adapter/command_context.py
 """
 import logging
 from dataclasses import dataclass, field
-from .reply import ReplyPayload
+from .message import ReplyPayload
 
 # 创建 adapter 层专用的 logger
 logger = logging.getLogger("TimelineTRPG.adapter")

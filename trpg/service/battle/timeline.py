@@ -12,48 +12,47 @@
 from typing import Dict, List, Optional
 import re
 
-from ..adapter.command_context import CommandContext
-from ..adapter.reply import ReplyManager
-from ..adapter.help import HelpEntry
-from ..adapter.storage import StorageBackend, StorageType
+from ...adapter.command_context import CommandContext
+from ...adapter.message import ReplyManager
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend, StorageType
+from ...infrastructure.config.game_config import game_config
 
 
 class TimelineModule:
     """
-    时间线模块
+    时间线模块（根据老项目设计）
     
     支持的指令格式：
     - .tl - 显示时间线列表
     - .tl new <名称> - 创建新时间线
     - .tl <序号> - 选择时间线
     - .tl del <序号>/all - 删除时间线
-    - .tl register <玩家ID> - 设置玩家ID
-    - .tl show [角色名] - 显示时间线
+    - .tl show - 显示时间线
     - .tl get <时间点> - 查询时间节点
+    - .tl in - 加入战斗
+    - .tl out - 退出战斗
     """
     
     def __init__(self):
         self.reply = ReplyManager("timeline")
+        self.system_reply = ReplyManager("system")
     
     @property
     def help_entry(self) -> HelpEntry:
         return HelpEntry(
             module="tl",
-            usage="[序号|new|del|register|show|get] [参数]",
+            usage="[序号|new|del|show|get|in|out] [参数]",
             summary="时间线管理",
             detail=(
                 "- 显示时间线列表\n"
                 "new {名称} - 创建新时间线\n"
                 "{序号} - 选择时间线\n"
                 "del {序号}/all - 删除时间线\n"
-                "register {数字} - 注册玩家ID\n"
                 "show - 显示时间线\n"
                 "get {时间点} - 查询指定时间点\n"
-                "\n"
-                "示例:\n"
-                "  tl new 战斗1 → 创建名为\"战斗1\"的时间线\n"
-                "  tl 1 → 选择第1个时间线\n"
-                "  tl show → 显示当前时间线"
+                "in - 加入战斗\n"
+                "out - 退出战斗"
             ),
         )
     
@@ -98,14 +97,6 @@ class TimelineModule:
             result = self._delete_timeline(storage_key, user_id, remaining_args)
             ctx.send(result)
         
-        elif main_command == 'register':
-            if not remaining_args:
-                response = self.reply.render("need_player_id")
-                ctx.send(response)
-                return True
-            result = self._register_player_id(storage_key, user_id, remaining_args)
-            ctx.send(result)
-        
         elif main_command == 'show':
             character_name = remaining_args if remaining_args else None
             result = self._show_timeline(storage_key, user_id, character_name)
@@ -119,8 +110,20 @@ class TimelineModule:
             result = self._get_time_point(storage_key, user_id, remaining_args)
             ctx.send(result)
         
+        elif main_command in ('in', 'join'):
+            # 加入战斗 - 转发到 battle 模块
+            from ..battle.battle import battle_module
+            result = await battle_module._join_battle(storage_key, user_id)
+            ctx.send(result)
+        
+        elif main_command in ('out', 'leave'):
+            # 退出战斗 - 转发到 battle 模块
+            from ..battle.battle import battle_module
+            result = await battle_module._leave_battle(storage_key, user_id)
+            ctx.send(result)
+        
         else:
-            response = self.reply.render("unknown_command")
+            response = self.system_reply.render("command_not_found", command=ctx.command)
             ctx.send(response)
         
         return True
@@ -214,15 +217,6 @@ class TimelineModule:
         except ValueError:
             return self.reply.render("invalid_index")
     
-    def _register_player_id(self, storage_key: str, user_id: str, player_id: str) -> str:
-        data = self._get_storage(storage_key)
-        player_ids = data.get("player_ids", {})
-        
-        player_ids[user_id] = player_id
-        data["player_ids"] = player_ids
-        
-        return self.reply.render("player_registered", player_id=player_id)
-    
     def _show_timeline(self, storage_key: str, user_id: str, character_name: Optional[str]) -> str:
         data = self._get_storage(storage_key)
         active_index = data.get("active_index")
@@ -236,11 +230,14 @@ class TimelineModule:
         if not timeline_data:
             return self.reply.render("empty_timeline")
         
+        current_time_val = timeline.get('current_time', 0)
+        max_time_val = timeline.get('max_time', 0)
+        
         lines = [
             self.reply.render("timeline_header", name=timeline.get('name', '未命名')),
             self.reply.render("timeline_current_max_time", 
-                current=timeline.get('current_time', 0), 
-                max=timeline.get('max_time', 0))
+                current=game_config.round_value(current_time_val, "time"), 
+                max=game_config.round_value(max_time_val, "time"))
         ]
         
         # 按时间点排序
@@ -259,9 +256,13 @@ class TimelineModule:
                 lines.append(f"\n{dashes} {time_str}t {dashes}")
                 
                 for action in actions:
+                    start_time = game_config.round_value(action.get('start_time', 0), "time")
+                    lead_time = game_config.round_value(action.get('lead_time', 0), "time")
+                    impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
+                    
                     lines.append(f"  [{action.get('character_name', '未知')}]")
-                    lines.append(f"    起始: {action.get('start_time', 0):.1f}t | 前摇: {action.get('lead_time', 0):.1f}t")
-                    lines.append(f"    属性: {action.get('attribute_used', '')} | 影响: {action.get('impact_value', 0):.1f}")
+                    lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
+                    lines.append(f"    属性: {action.get('attribute_used', '')} | 影响: {impact_value}")
                     if action.get('notes'):
                         lines.append(f"    {action.get('notes')}")
         
@@ -300,8 +301,9 @@ class TimelineModule:
         if exact_actions:
             result += f"时间点 {target_time} 的直接记录行动:\n"
             for action in exact_actions:
+                impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
                 result += f"  [{action.get('character_name', '未知')}] "
-                result += f"属性: {action.get('attribute_used', '')} 影响: {action.get('impact_value', 0):.1f}\n"
+                result += f"属性: {action.get('attribute_used', '')} 影响: {impact_value}\n"
         
         # 检查在该时间点正在进行的行动
         ongoing_actions = []
@@ -331,9 +333,15 @@ class TimelineModule:
             result += f"{target_time}t 正在进行的行动:\n"
             for info in ongoing_actions:
                 action = info['action']
+                completed_impact = game_config.round_value(info['completed_impact'], "percentage")
+                impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
+                completion_percentage = game_config.round_value(info['completion_percentage'], "percentage")
+                start_time = game_config.round_value(info['start_time'], "time")
+                end_time = game_config.round_value(info['end_time'], "time")
+                
                 result += f"  [{action.get('character_name', '未知')}] "
-                result += f"进度: {info['completed_impact']:.2f}/{action.get('impact_value', 0):.1f} ({info['completion_percentage']:.2f}%) "
-                result += f"| 执行期: {info['start_time']:.2f}-{info['end_time']:.2f}\n"
+                result += f"进度: {completed_impact}/{impact_value} ({completion_percentage}%) "
+                result += f"| 执行期: {start_time}-{end_time}\n"
         
         if not exact_actions and not ongoing_actions:
             result += f"时间点 {target_time} 没有相关行动"
