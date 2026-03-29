@@ -38,8 +38,12 @@ class ResourceRecordModule:
     COVERAGE_TYPE_MAPPING = {
         'hp': 'hp',
         '体力': 'hp',
+        'physical': 'hp',
+        '物理': 'hp',
         'mp': 'mp',
         '意志': 'mp',
+        'mental': 'mp',
+        '精神': 'mp',
         'all': 'all',
         '所有': 'all'
     }
@@ -670,14 +674,15 @@ class ResourceRecordModule:
             if s.get('coverage_type') == coverage_type
         )
         
-        shield_id = f"shield_{int(time.time())}_{hash(str(shield_value) + coverage_type + duration) % 10000}"
+        # 使用 ISO 格式的时间戳作为唯一标识
+        from datetime import datetime
+        shield_created_at = datetime.now().isoformat()
         
         shield = {
-            'id': shield_id,
             'value': shield_value,
             'coverage_type': coverage_type,
             'duration': duration,
-            'created_at': time.time()
+            'created_at': shield_created_at
         }
         
         shields = resources.get('shields', [])
@@ -686,7 +691,7 @@ class ResourceRecordModule:
         
         # 如果有持续时间，调度护盾到期事件
         if duration and duration != "0t" and duration != "0":
-            self._schedule_shield_event(conversation_id, user_id, shield_id, duration, coverage_type, shield_value)
+            await self._schedule_shield_event(conversation_id, user_id, shield_created_at, duration, coverage_type, shield_value)
         
         if await self._save_resource_data(user_id, resources):
             # 计算添加后的该类型护盾总值
@@ -794,22 +799,16 @@ class ResourceRecordModule:
             return self.reply.render("save_failed")
 
 
-    def _schedule_shield_event(self, conversation_id: str, user_id: str, shield_id: str, 
+    async def _schedule_shield_event(self, conversation_id: str, user_id: str, shield_created_at: str, 
                                duration: str, coverage_type: str, shield_value: float):
         """
         调度护盾到期事件
         """
         # 使用 infrastructure scheduler 避免循环引用
         from ...infrastructure.scheduler import schedule_event
-        import asyncio
         
-        # 获取角色名（同步方式）
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            character = loop.run_until_complete(self._get_active_character(user_id))
-        finally:
-            loop.close()
+        # 获取角色名
+        character = await self._get_active_character(user_id)
         
         if not character:
             return
@@ -821,7 +820,7 @@ class ResourceRecordModule:
         
         # 构建描述
         action_desc = f"{character_name} {coverage_type}护盾 {shield_value}"
-        callback_msg = f"{character_name} {coverage_type}护盾 {shield_value} 已到期"
+        callback_msg = f"{character_name} {coverage_type}护盾 {shield_value} 到期"
         
         # 调用 scheduler 调度事件
         schedule_event(
@@ -833,7 +832,7 @@ class ResourceRecordModule:
             callback_path=f"trpg.service.resource.resource.remove_expired_shield",
             callback_args={
                 "user_id": user_id,
-                "shield_id": shield_id
+                "shield_created_at": shield_created_at
             },
             callback_message=callback_msg,
             mode=mode,
@@ -841,57 +840,43 @@ class ResourceRecordModule:
         )
 
 
-def remove_expired_shield(user_id: str, shield_id: str) -> bool:
+async def remove_expired_shield(user_id: str, shield_created_at: str) -> bool:
     """
     模块级函数，用于移除到期的护盾
     由战斗系统在定时事件触发时调用
+    
+    infrastructure 层会统一处理事件循环
     """
-    import asyncio
+    from ..character.character import character_module
     
-    async def _do_remove():
-        character_module = None
-        
-        # 获取角色模块
-        from ..character.character import character_module as cm
-        character = cm.get_active_character(user_id)
-        if not character:
-            return False
-        
-        resources = character.get('resources', {})
-        shields = resources.get('shields', [])
-        
-        if not shields:
-            return False
-        
-        # 查找并移除指定ID的护盾
-        original_count = len(shields)
-        shields = [s for s in shields if s.get('id') != shield_id]
-        
-        if len(shields) < original_count:
-            resources['shields'] = shields
-            
-            # 保存角色数据
-            characters = await cm._get_user_characters(user_id)
-            for i, char in enumerate(characters):
-                if char.get('name') == character.get('name'):
-                    characters[i] = character
-                    break
-            
-            await cm._save_characters(user_id, characters)
-            return True
-        
+    character = await character_module.get_active_character(user_id)
+    if not character:
         return False
     
-    # 创建新的事件循环来执行异步操作
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_do_remove())
-        loop.close()
-        return result
-    except Exception as e:
-        print(f"Error removing expired shield: {e}")
+    resources = character.get('resources', {})
+    shields = resources.get('shields', [])
+    
+    if not shields:
         return False
+    
+    # 查找并移除指定 created_at 的护盾
+    original_count = len(shields)
+    shields = [s for s in shields if s.get('created_at') != shield_created_at]
+    
+    if len(shields) < original_count:
+        resources['shields'] = shields
+        
+        # 保存角色数据
+        characters = await character_module._get_user_characters(user_id)
+        for i, char in enumerate(characters):
+            if char.get('name') == character.get('name'):
+                characters[i] = character
+                break
+        
+        await character_module._save_characters(user_id, characters)
+        return True
+    
+    return False
 
 
 resource_record_module = ResourceRecordModule()

@@ -259,10 +259,15 @@ class BuffModule:
         char_data = active_char.get('data', {})
         
         # 检查属性是否存在
-        if resolved_attribute not in char_data:
-            return self.reply.render("attribute_not_found", attribute=resolved_attribute)
+        # 特殊范围（如物理、思维、所有）不需要检查角色数据
+        from ...infrastructure.attribute_resolver import AttributeResolver
+        if not AttributeResolver.is_scope(resolved_attribute):
+            if resolved_attribute not in char_data:
+                return self.reply.render("attribute_not_found", attribute=resolved_attribute)
         
         buffs = await self._get_buffs(user_id)
+        
+        created_at = datetime.now().isoformat()
         
         buff = {
             "name": buff_name,
@@ -270,7 +275,7 @@ class BuffModule:
             "type": buff_type,
             "value": value,
             "duration": duration,
-            "created_at": datetime.now().isoformat()
+            "created_at": created_at
         }
         
         buffs.append(buff)
@@ -278,47 +283,38 @@ class BuffModule:
         
         # 如果有持续时间，调度战斗事件
         if duration is not None:
-            # 通知战斗系统调度事件
-            self._schedule_buff_event(conversation_id, user_id, character_name, 
-                                    resolved_attribute, buff_type, value, duration)
+            # 构建描述
+            action_desc = f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
+            callback_message = f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
+            
+            # 直接调用 scheduler 调度事件
+            from ...infrastructure.scheduler import schedule_event
+            
+            mode = 'time_based' if (isinstance(duration, str) and duration.endswith('t')) else 'count_based'
+            duration_value = float(duration[:-1]) if (isinstance(duration, str) and duration.endswith('t')) else float(duration)
+            
+            schedule_event(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                character_name=character_name,
+                action_description=action_desc,
+                duration_or_count=duration_value,
+                callback_path="trpg.service.buff.buff.remove_expired_buff",
+                callback_args={
+                    "user_id": user_id,
+                    "created_at": created_at,
+                    "attribute": resolved_attribute,
+                    "buff_type": buff_type,
+                    "buff_value": value
+                },
+                callback_message=callback_message,
+                mode=mode,
+                event_type='buff'
+            )
         
         duration_str = "永久" if duration is None else str(duration)
         value_display = format_buff_value(value, buff_type)
         return self.reply.render("buff_added", name=buff_name, attribute=resolved_attribute, type=buff_type, value=value_display, duration=duration_str)
-    
-    def _schedule_buff_event(self, conversation_id: str, user_id: str, character_name: str,
-                           attribute: str, buff_type: str, buff_value: float, duration):
-        """
-        调度buff事件
-        """
-        # 使用 infrastructure scheduler 避免循环引用
-        from ...infrastructure.scheduler import schedule_event
-        
-        # 确定模式
-        mode = 'time_based' if (isinstance(duration, str) and duration.endswith('t')) else 'count_based'
-        duration_value = float(duration[:-1]) if (isinstance(duration, str) and duration.endswith('t')) else float(duration)
-        
-        # 构建描述
-        action_desc = f"{character_name} Buff{buff_type} {attribute}{buff_value:+g}"
-        
-        # 调用 scheduler 调度事件
-        schedule_event(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            character_name=character_name,
-            action_description=action_desc,
-            duration_or_count=duration_value,
-            callback_path=f"trpg.service.buff.buff.remove_expired_buff",
-            callback_args={
-                "user_id": user_id,
-                "attribute": attribute,
-                "buff_type": buff_type,
-                "buff_value": buff_value
-            },
-            callback_message=f"{character_name} Buff{buff_type} {attribute}{buff_value:+g} 已到期",
-            mode=mode,
-            event_type='buff'
-        )
     
     async def _remove_buff(self, user_id: str, attribute: Optional[str]) -> str:
         """删除buff（按属性名）"""
@@ -397,10 +393,24 @@ class BuffModule:
     
     def get_buff_modifier(self, user_id: str, attribute: str) -> float:
         """
-        获取角色指定属性的Buff修正值
+        获取角色指定属性的Buff修正值（同步版本）
         用于与角色属性系统集成
         """
         buffs = asyncio.run(self._get_buffs(user_id))
+        
+        total_modifier = 0.0
+        for buff in buffs:
+            if buff.get('attribute') == attribute:
+                total_modifier += buff.get('value', 0)
+        
+        return total_modifier
+    
+    async def get_buff_modifier_async(self, user_id: str, attribute: str) -> float:
+        """
+        获取角色指定属性的Buff修正值（异步版本）
+        用于与战斗系统集成
+        """
+        buffs = await self._get_buffs(user_id)
         
         total_modifier = 0.0
         for buff in buffs:
@@ -414,12 +424,13 @@ class BuffModule:
 _pending_character_saves: Dict[str, asyncio.Lock] = {}
 
 
-def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value: float) -> bool:
+async def remove_expired_buff(user_id: str, created_at: str, attribute: str = None, buff_type: str = None, buff_value: float = None) -> bool:
     """
     模块级函数，用于移除过期的buff
     由战斗系统在定时事件触发时调用
     
-    修改为从角色的buffs字段中读取和保存数据，与老项目一致
+    直接使用 created_at 精确匹配要删除的buff
+    infrastructure 层会统一处理事件循环
     """
     from ..character.character import character_module
     
@@ -427,7 +438,7 @@ def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value
     char_module = character_module
     
     # 获取当前激活的角色
-    active_char = char_module.get_active_character(user_id)
+    active_char = await char_module.get_active_character(user_id)
     if not active_char:
         return False
     
@@ -436,31 +447,21 @@ def remove_expired_buff(user_id: str, attribute: str, buff_type: str, buff_value
     if not buffs:
         return False
     
-    # 查找并移除匹配的buff
+    # 查找并移除匹配的buff（使用唯一标识：created_at）
     original_count = len(buffs)
-    buffs = [b for b in buffs if not (
-        b.get('attribute') == attribute and 
-        b.get('type') == buff_type and 
-        b.get('value') == buff_value
-    )]
+    buffs = [b for b in buffs if b.get('created_at') != created_at]
     
     if len(buffs) < original_count:
         # 更新并保存角色数据
         active_char['buffs'] = buffs
         
         # 保存角色数据
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            characters = loop.run_until_complete(char_module._get_user_characters(user_id))
-            for i, char in enumerate(characters):
-                if char.get('name') == active_char.get('name'):
-                    characters[i] = active_char
-                    break
-            loop.run_until_complete(char_module._save_characters(user_id, characters))
-        finally:
-            loop.close()
+        characters = await char_module._get_user_characters(user_id)
+        for i, char in enumerate(characters):
+            if char.get('name') == active_char.get('name'):
+                characters[i] = active_char
+                break
+        await char_module._save_characters(user_id, characters)
         
         return True
     

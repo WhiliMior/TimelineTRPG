@@ -30,7 +30,8 @@ class ResourceModifierModule:
     # 中文别名映射
     CHINESE_ALIASES = {
         "+体力": "+hp", "-体力": "-hp", "+意志": "+mp", "-意志": "-mp",
-        "+所有": "+all", "-所有": "-all", "体力": "hp", "意志": "mp", "所有": "all"
+        "+所有": "+all", "-所有": "-all", "体力": "hp", "意志": "mp", "所有": "all",
+        "+全部": "+all", "-全部": "-all", "全部": "all"
     }
     
     def __init__(self):
@@ -296,7 +297,8 @@ class ResourceModifierModule:
         # 如果有持续时间，调度资源修饰到期事件
         if duration and duration != "0t" and duration != "0":
             character_name = character.get('name', '未知角色')
-            self._schedule_modifier_event(conversation_id, user_id, created_at, duration, source, normalized_range, value, character_name)
+            # 传递原始字符串用于显示
+            self._schedule_modifier_event(conversation_id, user_id, created_at, duration, source, normalized_range, value_str, character_name)
         
         if await self._save_modifiers(user_id, modifiers):
             # 格式化数值显示（原始值和换算后）
@@ -394,7 +396,7 @@ class ResourceModifierModule:
 
 
     def _schedule_modifier_event(self, conversation_id: str, user_id: str, modifier_id: str,
-                                  duration: str, source: str, range_val: str, value: float,
+                                  duration: str, source: str, range_val: str, value: str,
                                   character_name: str = '未知角色'):
         """
         调度资源修饰到期事件
@@ -408,7 +410,7 @@ class ResourceModifierModule:
         
         # 构建描述
         action_desc = f"{character_name} {source} {range_val} {value}"
-        callback_msg = f"{character_name} {source} {range_val} {value} 修饰已到期"
+        callback_msg = f"{character_name} {source} {range_val} {value} 到期"
         
         # 调用 scheduler 调度事件
         schedule_event(
@@ -428,54 +430,42 @@ class ResourceModifierModule:
         )
 
 
-def remove_expired_modifier(user_id: str, modifier_id: str) -> bool:
+async def remove_expired_modifier(user_id: str, modifier_id: str) -> bool:
     """
     模块级函数，用于移除过期的资源修饰
     由战斗系统在定时事件触发时调用
+    
+    infrastructure 层会统一处理事件循环
     """
-    import asyncio
+    from ..character.character import character_module
     
-    async def _do_remove():
-        from ..character.character import character_module
-        
-        character = await character_module.get_active_character(user_id)
-        if not character:
-            return False
-        
-        modifiers = character.get('resource_modifiers', [])
-        
-        if not modifiers:
-            return False
-        
-        # 查找并移除指定ID的修饰
-        original_count = len(modifiers)
-        modifiers = [m for m in modifiers if m.get('编号') != modifier_id]
-        
-        if len(modifiers) < original_count:
-            character['resource_modifiers'] = modifiers
-            
-            # 保存角色数据
-            characters = await character_module._get_user_characters(user_id)
-            for i, char in enumerate(characters):
-                if char.get('name') == character.get('name'):
-                    characters[i] = character
-                    break
-            
-            await character_module._save_characters(user_id, characters)
-            return True
-        
+    character = await character_module.get_active_character(user_id)
+    if not character:
         return False
     
-    # 创建新的事件循环来执行异步操作
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_do_remove())
-        loop.close()
-        return result
-    except Exception as e:
-        print(f"Error removing expired modifier: {e}")
+    modifiers = character.get('resource_modifiers', [])
+    
+    if not modifiers:
         return False
+    
+    # 查找并移除指定ID的修饰
+    original_count = len(modifiers)
+    modifiers = [m for m in modifiers if m.get('created_at') != modifier_id]
+    
+    if len(modifiers) < original_count:
+        character['resource_modifiers'] = modifiers
+        
+        # 保存角色数据
+        characters = await character_module._get_user_characters(user_id)
+        for i, char in enumerate(characters):
+            if char.get('name') == character.get('name'):
+                characters[i] = character
+                break
+        
+        await character_module._save_characters(user_id, characters)
+        return True
+    
+    return False
 
 
 resource_modifier_module = ResourceModifierModule()

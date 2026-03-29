@@ -8,14 +8,17 @@
 - 玩家ID注册
 - 时间线显示
 - 时间点查询
+
+注意：根据新设计，战斗指令（in/out）已移至 battle 模块
 """
 from typing import Dict, List, Optional
 import re
+from datetime import datetime
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
-from ...infrastructure.storage import StorageBackend, StorageType
+from ...infrastructure.storage import StorageBackend
 from ...infrastructure.config.game_config import game_config
 
 
@@ -30,8 +33,6 @@ class TimelineModule:
     - .tl del <序号>/all - 删除时间线
     - .tl show - 显示时间线
     - .tl get <时间点> - 查询时间节点
-    - .tl in - 加入战斗
-    - .tl out - 退出战斗
     """
     
     def __init__(self):
@@ -42,7 +43,7 @@ class TimelineModule:
     def help_entry(self) -> HelpEntry:
         return HelpEntry(
             module="tl",
-            usage="[序号|new|del|show|get|in|out] [参数]",
+            usage="[序号|new|del|show|get|acc] [参数]",
             summary="时间线管理",
             detail=(
                 "- 显示时间线列表\n"
@@ -51,8 +52,7 @@ class TimelineModule:
                 "del {序号}/all - 删除时间线\n"
                 "show - 显示时间线\n"
                 "get {时间点} - 查询指定时间点\n"
-                "in - 加入战斗\n"
-                "out - 退出战斗"
+                "acc {精度} - 设置时间精度(0=整数,1=0.1,2=0.01)\n"
             ),
         )
     
@@ -62,10 +62,11 @@ class TimelineModule:
         """
         user_id = ctx.sender_id or "default"
         conversation_id = ctx.group_id or ctx.session_id or user_id
+        is_group = ctx.group_id is not None
         storage_key = f"{conversation_id}"
         
         if not ctx.args:
-            result = self._list_timelines(storage_key, user_id)
+            result = self._list_timelines(storage_key, user_id, is_group)
             ctx.send(result)
             return True
         
@@ -77,13 +78,13 @@ class TimelineModule:
                 response = self.reply.render("need_battle_name")
                 ctx.send(response)
                 return True
-            result = self._create_timeline(storage_key, user_id, remaining_args)
+            result = self._create_timeline(storage_key, user_id, is_group, remaining_args)
             ctx.send(result)
         
         elif main_command.isdigit():
             try:
                 index = int(main_command)
-                result = self._select_timeline(storage_key, user_id, index)
+                result = self._select_timeline(storage_key, user_id, is_group, index)
                 ctx.send(result)
             except ValueError:
                 response = self.reply.render("index_must_be_number")
@@ -94,12 +95,12 @@ class TimelineModule:
                 response = self.reply.render("need_delete_argument")
                 ctx.send(response)
                 return True
-            result = self._delete_timeline(storage_key, user_id, remaining_args)
+            result = self._delete_timeline(storage_key, user_id, is_group, remaining_args)
             ctx.send(result)
         
         elif main_command == 'show':
             character_name = remaining_args if remaining_args else None
-            result = self._show_timeline(storage_key, user_id, character_name)
+            result = self._show_timeline(storage_key, user_id, is_group, character_name)
             ctx.send(result)
         
         elif main_command == 'get':
@@ -107,19 +108,11 @@ class TimelineModule:
                 response = self.reply.render("need_time_point")
                 ctx.send(response)
                 return True
-            result = self._get_time_point(storage_key, user_id, remaining_args)
+            result = self._get_time_point(storage_key, user_id, is_group, remaining_args)
             ctx.send(result)
         
-        elif main_command in ('in', 'join'):
-            # 加入战斗 - 转发到 battle 模块
-            from ..battle.battle import battle_module
-            result = await battle_module._join_battle(storage_key, user_id)
-            ctx.send(result)
-        
-        elif main_command in ('out', 'leave'):
-            # 退出战斗 - 转发到 battle 模块
-            from ..battle.battle import battle_module
-            result = await battle_module._leave_battle(storage_key, user_id)
+        elif main_command == 'acc':
+            result = self._set_accuracy(remaining_args)
             ctx.send(result)
         
         else:
@@ -128,113 +121,168 @@ class TimelineModule:
         
         return True
     
-    def _get_storage(self, storage_key: str) -> Dict:
-        data = StorageBackend.load(StorageType.TIMELINE, storage_key, default={
-            "timelines": [],
-            "active_index": None,
-            "player_ids": {}
-        })
-        return data
+    def _get_battle_data(self, storage_key: str, is_group: bool) -> Dict:
+        """获取战斗时间轴数据"""
+        return StorageBackend.load_battle_timeline(storage_key, is_group)
     
-    def _save_storage(self, storage_key: str, data: Dict):
-        """保存时间线数据"""
-        StorageBackend.save(StorageType.TIMELINE, storage_key, data)
+    def _save_battle_data(self, storage_key: str, data: Dict, is_group: bool):
+        """保存战斗时间轴数据"""
+        StorageBackend.save_battle_timeline(storage_key, data, is_group)
     
-    def _list_timelines(self, storage_key: str, user_id: str) -> str:
-        data = self._get_storage(storage_key)
-        timelines = data.get("timelines", [])
+    def _list_timelines(self, storage_key: str, user_id: str, is_group: bool) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        battle_list = data.get("battle_list", {})
         
-        if not timelines:
+        if not battle_list:
             return self.reply.render("no_timelines")
         
         lines = [self.reply.render("timeline_list_header")]
-        for i, tl in enumerate(timelines):
-            active = "●" if i == data.get("active_index") else "  "
-            lines.append(f"[{i + 1}] [{active}] {tl.get('name', '未命名')}")
+        
+        # 按时间线ID排序
+        sorted_ids = sorted(battle_list.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+        
+        active_id = data.get("active_battle_id")
+        
+        for i, battle_id in enumerate(sorted_ids):
+            battle = battle_list[battle_id]
+            active = "●" if battle_id == active_id else "  "
+            name = battle.get('name', '未命名')
+            lines.append(f"[{i + 1}] [{active}] {name}")
         
         return "\n".join(lines)
     
-    def _create_timeline(self, storage_key: str, user_id: str, name: str) -> str:
-        data = self._get_storage(storage_key)
-        timelines = data.get("timelines", [])
+    def _create_timeline(self, storage_key: str, user_id: str, is_group: bool, name: str) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        battle_list = data.get("battle_list", {})
         
         # 检查名称是否已存在
-        for tl in timelines:
-            if tl.get('name') == name:
+        for battle in battle_list.values():
+            if battle.get('name') == name:
                 return self.reply.render("battle_name_exists", name=name)
         
-        timelines.append({
+        # 使用时间戳作为新的战斗ID
+        import time
+        new_battle_id = str(int(time.time()))
+        
+        # 创建新的时间线（战斗）
+        new_battle = {
             "name": name,
             "created_at": self._get_current_time(),
             "max_time": 0,
             "current_time": 0,
-            "timeline": {}
-        })
+            "timeline": {},
+            "participants": {},
+            "scheduled_events": []
+        }
         
-        data["timelines"] = timelines
+        data["battle_list"][new_battle_id] = new_battle
         # 自动选择新创建的时间线
-        data["active_index"] = len(timelines) - 1
+        data["active_battle_id"] = new_battle_id
+        
+        self._save_battle_data(storage_key, data, is_group)
         return self.reply.render("timeline_created", name=name)
     
-    def _select_timeline(self, storage_key: str, user_id: str, index: int) -> str:
-        data = self._get_storage(storage_key)
-        timelines = data.get("timelines", [])
+    def _select_timeline(self, storage_key: str, user_id: str, is_group: bool, index: int) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        battle_list = data.get("battle_list", {})
         
-        if not timelines or index < 1 or index > len(timelines):
+        if not battle_list:
+            return self.reply.render("no_timelines")
+        
+        # 按时间线ID排序
+        sorted_ids = sorted(battle_list.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+        
+        if index < 1 or index > len(sorted_ids):
             return self.reply.render("invalid_index")
         
-        data["active_index"] = index - 1
-        return self.reply.render("timeline_selected", name=timelines[index - 1].get('name', '未命名'))
-    
-    def _delete_timeline(self, storage_key: str, user_id: str, arg: str) -> str:
-        data = self._get_storage(storage_key)
-        timelines = data.get("timelines", [])
+        selected_id = sorted_ids[index - 1]
+        selected_battle = battle_list[selected_id]
         
-        if not timelines:
+        data["active_battle_id"] = selected_id
+        self._save_battle_data(storage_key, data, is_group)
+        
+        return self.reply.render("timeline_selected", name=selected_battle.get('name', '未命名'))
+    
+    def _delete_timeline(self, storage_key: str, user_id: str, is_group: bool, arg: str) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        battle_list = data.get("battle_list", {})
+        
+        if not battle_list:
             return self.reply.render("no_timelines")
         
         if arg.lower() == 'all':
-            data["timelines"] = []
-            data["active_index"] = None
+            data["battle_list"] = {}
+            data["active_battle_id"] = None
+            self._save_battle_data(storage_key, data, is_group)
             return self.reply.render("all_timelines_deleted")
+        
+        # 按时间线ID排序
+        sorted_ids = sorted(battle_list.keys(), key=lambda x: int(x) if x.isdigit() else 0)
         
         try:
             index = int(arg) - 1
-            if index < 0 or index >= len(timelines):
+            if index < 0 or index >= len(sorted_ids):
                 return self.reply.render("invalid_index")
             
-            deleted = timelines.pop(index)
+            delete_id = sorted_ids[index]
+            deleted = battle_list.pop(delete_id)
             
-            # 调整 active_index
-            active = data.get("active_index")
-            if active is not None:
-                if index < active:
-                    data["active_index"] = active - 1
-                elif index == active:
-                    data["active_index"] = None
+            # 调整 active_battle_id
+            active = data.get("active_battle_id")
+            if active == delete_id:
+                data["active_battle_id"] = None
+            
+            self._save_battle_data(storage_key, data, is_group)
             
             return self.reply.render("timeline_deleted", name=deleted.get('name', '未命名'))
         except ValueError:
             return self.reply.render("invalid_index")
     
-    def _show_timeline(self, storage_key: str, user_id: str, character_name: Optional[str]) -> str:
-        data = self._get_storage(storage_key)
-        active_index = data.get("active_index")
+    def _set_accuracy(self, arg: str) -> str:
+        """
+        设置时间精度
+        参数为小数位数，例如 0=整数，1=0.1，2=0.01
+        """
+        if not arg:
+            current_precision = game_config.get_precision("time")
+            min_unit = game_config.get_min_time_unit()
+            return f"当前时间精度: {current_precision} 位小数 (最小时间单位: {min_unit}t)"
         
-        if active_index is None or not data.get("timelines"):
+        try:
+            precision = int(arg)
+            if precision < 0 or precision > 5:
+                return "精度范围: 0-5"
+            
+            # 设置时间精度
+            if game_config.set_precision("time", precision):
+                min_unit = game_config.get_min_time_unit()
+                return f"时间精度已设置为: {precision} 位小数 (最小时间单位: {min_unit}t)"
+            else:
+                return "保存配置失败"
+        except ValueError:
+            return "请输入有效的数字"
+    
+    def _show_timeline(self, storage_key: str, user_id: str, is_group: bool, character_name: Optional[str]) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        active_id = data.get("active_battle_id")
+        
+        if active_id is None or not data.get("battle_list"):
             return self.reply.render("no_active_timeline")
         
-        timeline = data["timelines"][active_index]
-        timeline_data = timeline.get("timeline", {})
+        battle = data["battle_list"].get(active_id)
+        if not battle:
+            return self.reply.render("no_active_timeline")
+        
+        timeline_data = battle.get("timeline", {})
         
         if not timeline_data:
             return self.reply.render("empty_timeline")
         
-        current_time_val = timeline.get('current_time', 0)
-        max_time_val = timeline.get('max_time', 0)
+        current_time_val = battle.get('current_time', 0)
+        max_time_val = battle.get('max_time', 0)
         
         lines = [
-            self.reply.render("timeline_header", name=timeline.get('name', '未命名')),
+            self.reply.render("timeline_header", name=battle.get('name', '未命名')),
             self.reply.render("timeline_current_max_time", 
                 current=game_config.round_value(current_time_val, "time"), 
                 max=game_config.round_value(max_time_val, "time"))
@@ -242,7 +290,7 @@ class TimelineModule:
         
         # 按时间点排序
         sorted_times = sorted([float(t) for t in timeline_data.keys()])
-        current_time = timeline.get('current_time', 0)
+        current_time = battle.get('current_time', 0)
         
         for time_point in sorted_times:
             if time_point < current_time:
@@ -255,27 +303,66 @@ class TimelineModule:
                 dashes = "—" * 5
                 lines.append(f"\n{dashes} {time_str}t {dashes}")
                 
+                # 按角色分组，只保留每个角色的最新行动
+                latest_actions_by_character = {}
                 for action in actions:
+                    user_id_action = action.get('user_id', '')
+                    char_name = action.get('character_name', '未知')
+                    key = (user_id_action, char_name)
+                    
+                    # 保留字典中已有的（更早添加的，即更早创建的行动）
+                    if key not in latest_actions_by_character:
+                        latest_actions_by_character[key] = action
+                
+                for action in latest_actions_by_character.values():
+                    # 检查角色状态
+                    user_id_action = action.get('user_id', '')
+                    char_name = action.get('character_name', '未知')
+                    
+                    # 检查参与者状态
+                    participants = battle.get('participants', {})
+                    user_participants = participants.get(user_id_action, {})
+                    char_info = user_participants.get(char_name, {})
+                    
+                    if char_info.get('status') != '参与中':
+                        continue
+                    
                     start_time = game_config.round_value(action.get('start_time', 0), "time")
                     lead_time = game_config.round_value(action.get('lead_time', 0), "time")
                     impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
                     
-                    lines.append(f"  [{action.get('character_name', '未知')}]")
+                    lines.append(f"  [{char_name}]")
                     lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
                     lines.append(f"    属性: {action.get('attribute_used', '')} | 影响: {impact_value}")
                     if action.get('notes'):
                         lines.append(f"    {action.get('notes')}")
         
+        # 显示定时事件
+        scheduled_events = battle.get('scheduled_events', [])
+        time_based_events = [
+            e for e in scheduled_events 
+            if e.get('mode') == 'time_based' and e.get('end_time') and current_time < e.get('end_time', 0)
+        ]
+        
+        if time_based_events:
+            lines.append("\n【定时事件】")
+            for event in time_based_events:
+                # 优先显示回调消息，否则显示行动描述
+                event_desc = event.get('callback_message') or event.get('action_description', '')
+                lines.append(f"  {event.get('end_time', 0)}t - {event_desc}")
+        
         return "\n".join(lines)
     
-    def _get_time_point(self, storage_key: str, user_id: str, time_point: str) -> str:
-        data = self._get_storage(storage_key)
-        active_index = data.get("active_index")
+    def _get_time_point(self, storage_key: str, user_id: str, is_group: bool, time_point: str) -> str:
+        data = self._get_battle_data(storage_key, is_group)
+        active_id = data.get("active_battle_id")
         
-        if active_index is None or not data.get("timelines"):
+        if active_id is None or not data.get("battle_list"):
             return self.reply.render("no_active_timeline")
         
-        timeline = data["timelines"][active_index]
+        battle = data["battle_list"].get(active_id)
+        if not battle:
+            return self.reply.render("no_active_timeline")
         
         # 处理数字和数字+t格式
         processed_time_str = time_point.lower().replace('t', '')
@@ -286,32 +373,32 @@ class TimelineModule:
             return self.reply.render("invalid_time_format")
         
         # 检查目标时间点是否超过max_time
-        max_time = timeline.get('max_time', 0)
+        max_time = battle.get('max_time', 0)
         if target_time > max_time:
             return self.reply.render("time_exceeds_max", time=target_time, max=max_time)
         
-        timeline_data = timeline.get("timeline", {})
+        timeline_data = battle.get("timeline", {})
+        participants = battle.get("participants", {})
         
-        result = f"【时间点 {target_time} 查询结果】\n"
+        result = f"【{battle.get('name', '战斗')} - {target_time}t 时间点状态】\n"
         
-        # 检查是否有正好在该时间点记录的行动
-        time_str = str(target_time)
-        exact_actions = timeline_data.get(time_str, [])
-        
-        if exact_actions:
-            result += f"时间点 {target_time} 的直接记录行动:\n"
-            for action in exact_actions:
-                impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
-                result += f"  [{action.get('character_name', '未知')}] "
-                result += f"属性: {action.get('attribute_used', '')} 影响: {impact_value}\n"
-        
-        # 检查在该时间点正在进行的行动
+        # 检查在该时间点正在进行的行动（包含跨时间点的行动）
         ongoing_actions = []
         for time_str_recorded, actions in timeline_data.items():
             recorded_time = float(time_str_recorded)
             for action in actions:
+                # 检查角色状态
+                action_user_id = action.get('user_id', '')
+                char_name = action.get('character_name', '未知')
+                user_participants = participants.get(action_user_id, {})
+                char_info = user_participants.get(char_name, {})
+                
+                if char_info.get('status') != '参与中':
+                    continue
+                
                 start_time = recorded_time - action.get('lead_time', 0)
                 
+                # 检查该时间点是否有行动在执行
                 if start_time <= target_time <= recorded_time:
                     elapsed_time = target_time - start_time
                     lead_time = action.get('lead_time', 1)
@@ -328,29 +415,28 @@ class TimelineModule:
                     })
         
         if ongoing_actions:
-            if exact_actions:
-                result += "\n"
-            result += f"{target_time}t 正在进行的行动:\n"
             for info in ongoing_actions:
                 action = info['action']
-                completed_impact = game_config.round_value(info['completed_impact'], "percentage")
+                completed_impact = game_config.round_value(info['completed_impact'], "impact")
                 impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
                 completion_percentage = game_config.round_value(info['completion_percentage'], "percentage")
                 start_time = game_config.round_value(info['start_time'], "time")
                 end_time = game_config.round_value(info['end_time'], "time")
                 
-                result += f"  [{action.get('character_name', '未知')}] "
-                result += f"进度: {completed_impact}/{impact_value} ({completion_percentage}%) "
-                result += f"| 执行期: {start_time}-{end_time}\n"
+                result += f"[{action.get('character_name', '未知')}]\n"
+                result += f"  属性: {action.get('attribute_used', '')} | 影响: {completed_impact}/{impact_value}\n"
+                result += f"  进度: {completion_percentage}% | 执行期: {start_time}-{end_time}t\n"
+                if action.get('notes'):
+                    result += f"  备注: {action['notes']}\n"
+                result += "\n"
         
-        if not exact_actions and not ongoing_actions:
-            result += f"时间点 {target_time} 没有相关行动"
+        if not ongoing_actions:
+            result += f"时间点 {target_time}t 没有正在进行的行动"
         
         return result
     
     def _get_current_time(self) -> str:
         """获取当前时间字符串"""
-        from datetime import datetime
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 

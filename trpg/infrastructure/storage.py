@@ -21,10 +21,17 @@ class StorageType(str, Enum):
     """存储类型枚举"""
     USER = "User"
     BATTLE = "Battle"
+    BATTLE_TIMELINE = "BattleTimeline"  # 战斗时间轴存储（Group/Private结构）
     EXAMINATION = "Examination"
     WEAPON = "Weapon"
     TIMELINE = "Timeline"
     RESOURCE = "Resource"
+
+
+class SessionType(str, Enum):
+    """会话类型枚举（用于 BattleTimeline）"""
+    GROUP = "Group"
+    PRIVATE = "Private"
 
 
 class StorageBackend:
@@ -492,3 +499,93 @@ class StorageBackend:
             保存是否成功
         """
         return cls.save(StorageType.RESOURCE, user_id, resources)
+    
+    # ==================== BattleTimeline 战斗时间轴存储 ====================
+    
+    @classmethod
+    def _get_battle_timeline_dir(cls, session_type: SessionType, conversation_id: str) -> Path:
+        """
+        获取战斗时间轴目录
+        
+        Args:
+            session_type: 会话类型（Group 或 Private）
+            conversation_id: 群组ID或私聊ID
+        
+        Returns:
+            目录路径
+        """
+        base_dir = cls._get_plugin_data_dir() / StorageType.BATTLE_TIMELINE.value / session_type.value
+        # 替换 Windows 不允许的路径字符
+        safe_id = str(conversation_id).replace(":", "_").replace("/", "_").replace("\\", "_")
+        dir_path = base_dir / safe_id
+        dir_path.mkdir(parents=True, exist_ok=True)
+        return dir_path
+    
+    @classmethod
+    def _get_battle_timeline_file_path(cls, session_type: SessionType, conversation_id: str) -> Path:
+        """
+        获取战斗时间轴文件路径
+        
+        Args:
+            session_type: 会话类型（Group 或 Private）
+            conversation_id: 群组ID或私聊ID
+        
+        Returns:
+            文件路径
+        """
+        return cls._get_battle_timeline_dir(session_type, conversation_id) / "data.json"
+    
+    @classmethod
+    def load_battle_timeline(cls, conversation_id: str, is_group: bool = True) -> Dict:
+        """
+        加载战斗时间轴数据
+        
+        Args:
+            conversation_id: 群组ID或私聊ID
+            is_group: True 表示群聊，False 表示私聊
+        
+        Returns:
+            战斗时间轴数据
+        """
+        session_type = SessionType.GROUP if is_group else SessionType.PRIVATE
+        file_path = cls._get_battle_timeline_file_path(session_type, conversation_id)
+        
+        default = {
+            "active_battle_id": None,
+            "player": {},
+            "battle_list": {}
+        }
+        
+        if not file_path.exists():
+            return default
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[StorageBackend] 加载战斗时间轴失败 {file_path}: {e}")
+            return default
+    
+    @classmethod
+    def save_battle_timeline(cls, conversation_id: str, data: Dict, is_group: bool = True) -> bool:
+        """
+        保存战斗时间轴数据
+        
+        Args:
+            conversation_id: 群组ID或私聊ID
+            data: 战斗时间轴数据
+            is_group: True 表示群聊，False 表示私聊
+        
+        Returns:
+            保存是否成功
+        """
+        session_type = SessionType.GROUP if is_group else SessionType.PRIVATE
+        file_path = cls._get_battle_timeline_file_path(session_type, conversation_id)
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except (TypeError, IOError) as e:
+            print(f"[StorageBackend] 保存战斗时间轴失败 {file_path}: {e}")
+            return False

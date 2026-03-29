@@ -56,6 +56,7 @@
     "invalid_index": "无效的buff序号",
     "invalid_number": "请输入有效的数字",
     "no_buffs_for_attribute": "{attribute} 属性没有任何Buff",
+    "attribute_not_found": "未找到属性[{attribute}]",
     "help": "buff 指令帮助"
   },
   "resource_modifier": {
@@ -81,7 +82,7 @@
     "invalid_params": "无效的参数",
     "help": "neg 指令帮助"
   },
-  "timeline": {
+    "timeline": {
     "no_timelines": "暂无时间线",
     "timeline_list_header": "=== 时间线列表 ===\n",
     "timeline_created": "已创建时间线: {name}",
@@ -91,6 +92,9 @@
     "no_active_timeline": "没有激活的时间线",
     "empty_timeline": "时间线为空",
     "timeline_header": "=== {name} ===\n",
+    "timeline_current_max_time": "当前时间: {current}t\n最大时间: {max}t",
+    "timeline_accuracy_set": "时间精度已设置为: {precision}位小数",
+    "timeline_current_accuracy": "当前时间精度: {precision}位小数(最小时间单位: {min_unit}t)",
     "time_point_not_found": "未找到时间点 {time}",
     "need_battle_name": "请输入时间线名称",
     "need_delete_argument": "请指定删除参数",
@@ -143,7 +147,7 @@
     "action_attribute_impact": "  属性: {attribute} | 影响: {impact}",
     "action_notes": "    {notes}",
     "count_based_event_info": "    {desc} - 剩余次数: {count}",
-    "scheduled_event_display": "{time}t ———— {desc}到期 ————",
+    "scheduled_event_display": "{time}t ———— {desc} ————",
     "no_character": "您当前没有激活的角色",
     "input_error": "指令格式错误",
     "invalid_time_value": "无效的时间值",

@@ -69,6 +69,7 @@ class TimelineTRPG(Star):
         self.module_instances.append(level_module)
         self._setup_routes()
         self._collect_help_entries()
+        
         logger.info(f"[{PLUGIN_NAME}] 插件初始化完成，adapter 层架构已加载")
         logger.info(f"[{PLUGIN_NAME}] 路由表: {self.router.list_commands()}")
     

@@ -92,6 +92,41 @@ class GameConfig:
             return int(rounded)
         
         return rounded
+    
+    def set_precision(self, precision_type: str, value: int) -> bool:
+        """
+        设置指定类型的精度并保存到配置文件
+        
+        Args:
+            precision_type: 精度类型 (time/impact/percentage/attribute/resource)
+            value: 小数位数
+        
+        Returns:
+            bool: 是否成功保存
+        """
+        if "timeline_precision" not in self._config:
+            self._config["timeline_precision"] = {}
+        
+        self._config["timeline_precision"][precision_type] = value
+        
+        # 保存到配置文件
+        config_path = Path(__file__).parent / "game_config.json"
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(self._config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def get_min_time_unit(self) -> float:
+        """
+        获取时间的最小单位（基于精度计算）
+        
+        Returns:
+            float: 最小时间单位，例如精度为1时返回0.1
+        """
+        precision = self.get_precision("time")
+        return 10 ** (-precision)
 
 
 # 全局单例
