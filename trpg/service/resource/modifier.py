@@ -72,7 +72,7 @@ class ResourceModifierModule:
         command = ctx.args[0].lower()
         
         # 添加资源修饰
-        if command == 'add' and len(ctx.args) >= 5:
+        if command == 'add' and len(ctx.args) >= 4:
             source = ctx.args[1]
             range_input = ctx.args[2]
             value_str = ctx.args[3]
@@ -169,35 +169,94 @@ class ResourceModifierModule:
         
         return None
     
-    def _parse_value(self, value_str: str, character_data: Dict) -> Optional[float]:
-        """解析数值，支持百分比、d格式和普通数字"""
+    def _parse_value(self, value_str: str) -> Optional[Dict]:
+        """
+        解析数值，支持百分比、d格式(防御值)和普通数字(固定值)
+        
+        返回格式（记录原始值）:
+        - 百分比: {"raw": "15%", "type": "percentage"}
+        - 固定值: {"raw": "15", "type": "fixed"}
+        - 防御值: {"raw": "24d", "type": "defense"}
+        """
         value_str = value_str.strip()
         
         # 百分比格式: 15%
         if value_str.endswith('%'):
-            try:
-                value = float(value_str[:-1])
-                return value / 100.0
-            except ValueError:
-                return None
+            return {"raw": value_str, "type": "percentage"}
         
-        # d格式: 2d
+        # d格式: 2d (防御值)
         elif value_str.endswith('d') or value_str.endswith('D'):
-            try:
-                value = float(value_str[:-1])
-                # 获取角色等级
-                level = character_data.get('等级', 1)
-                # 使用等级计算
-                return value * level
-            except ValueError:
-                return None
+            return {"raw": value_str, "type": "defense"}
         
-        # 普通数字格式
+        # 普通数字格式 - 固定值
         else:
             try:
-                return float(value_str)
+                float(value_str)
+                return {"raw": value_str, "type": "fixed"}
             except ValueError:
                 return None
+    
+    def _calculate_modifier_value(self, value_data: Dict, character_data: Dict, range_val: str) -> float:
+        """
+        根据保存的原始值计算实际的修饰数值
+        在.rc指令中调用此方法计算实际效果
+        """
+        raw = value_data.get('raw', '0')
+        value_type = value_data.get('type', 'percentage')
+        
+        if value_type == 'percentage':
+            # 百分比: 15% -> 0.15
+            try:
+                return float(raw.rstrip('%')) / 100.0
+            except ValueError:
+                return 0.0
+        
+        elif value_type == 'defense':
+            # 防御值: 需要根据角色等级和范围计算
+            try:
+                defense = float(raw.rstrip('dD'))
+                level = character_data.get('等级', 1)
+                
+                if range_val.startswith('-'):
+                    # 减伤效果: 防御/(防御+(等级*10))
+                    return defense / (defense + (level * 10))
+                else:
+                    # 增疗效果: 防御/(等级*10)
+                    return defense / (level * 10)
+            except ValueError:
+                return 0.0
+        
+        else:  # fixed
+            # 固定值
+            try:
+                return float(raw)
+            except ValueError:
+                return 0.0
+    
+    def _format_modifier_display(self, value_data: Dict, character_data: Dict, range_val: str) -> str:
+        """
+        格式化修饰数值显示（显示原始值和换算后的值）
+        """
+        raw = value_data.get('raw', '0')
+        value_type = value_data.get('type', 'percentage')
+        
+        if value_type == 'percentage':
+            try:
+                pct = float(raw.rstrip('%'))
+                return f"{pct:.0f}%"
+            except ValueError:
+                return raw
+        
+        elif value_type == 'defense':
+            try:
+                # 计算换算后的百分比
+                calculated = self._calculate_modifier_value(value_data, character_data, range_val)
+                return f"{raw} ({calculated*100:.0f}%)"
+            except ValueError:
+                return raw
+        
+        else:  # fixed
+            return raw
     
     async def _add_modifier(self, user_id: str, conversation_id: str, source: str, range_input: str, 
                            value_str: str, type_input: str, duration: str) -> str:
@@ -212,21 +271,22 @@ class ResourceModifierModule:
             return self.reply.render("invalid_number")
         
         # 解析数值
-        value = self._parse_value(value_str, character.get('data', {}))
+        value = self._parse_value(value_str)
         if value is None:
             return self.reply.render("invalid_number")
         
-        # 生成唯一ID
-        modifier_id = f"rm_{int(time.time())}_{hash(source + normalized_range + str(value) + type_input) % 10000}"
+        # 创建时间
+        from datetime import datetime
+        created_at = datetime.now().isoformat()
         
-        # 创建修饰符
+        # 创建修饰符（使用英文key）
         modifier = {
-            "编号": modifier_id,
-            "来源": source,
-            "范围": normalized_range,
-            "数值": value,
-            "类型": type_input,
-            "持续时间": duration if duration else ""
+            "source": source,
+            "range": normalized_range,
+            "value": value,
+            "type": type_input if type_input else "所有",
+            "duration": duration if duration else "",
+            "created_at": created_at
         }
         
         # 获取或初始化资源修饰列表
@@ -235,10 +295,14 @@ class ResourceModifierModule:
         
         # 如果有持续时间，调度资源修饰到期事件
         if duration and duration != "0t" and duration != "0":
-            self._schedule_modifier_event(conversation_id, user_id, modifier_id, duration, source, normalized_range, value)
+            character_name = character.get('name', '未知角色')
+            self._schedule_modifier_event(conversation_id, user_id, created_at, duration, source, normalized_range, value, character_name)
         
         if await self._save_modifiers(user_id, modifiers):
-            return self.reply.render("modifier_added", source=source, range=range_input, value=str(value))
+            # 格式化数值显示（原始值和换算后）
+            character_data = character.get('data', {})
+            value_display = self._format_modifier_display(value, character_data, normalized_range)
+            return self.reply.render("modifier_added", source=source, range=range_input, value=value_display)
         else:
             return self.reply.render("save_failed")
     
@@ -297,44 +361,46 @@ class ResourceModifierModule:
         if range_filter:
             normalized_filter = self._normalize_range(range_filter)
             if normalized_filter:
-                modifiers = [mod for mod in modifiers if mod.get('范围') == normalized_filter]
+                modifiers = [mod for mod in modifiers if mod.get('range') == normalized_filter]
             else:
                 return self.reply.render("no_modifiers")
         
         if not modifiers:
             return self.reply.render("no_modifiers")
         
+        # 获取角色数据用于计算防御值
+        character_data = character.get('data', {})
+        
         # 构建列表
         lines = [self.reply.render("modifier_list_header")]
         
         for i, modifier in enumerate(modifiers):
-            source = modifier.get('来源', '')
-            range_val = modifier.get('范围', '')
-            value = modifier.get('数值', 0)
-            type_val = modifier.get('类型', '通用')
-            duration = modifier.get('持续时间', '永久')
+            source = modifier.get('source', '')
+            range_val = modifier.get('range', '')
+            value = modifier.get('value', {})
+            type_val = modifier.get('type', '所有')
+            duration = modifier.get('duration', '')
             
-            # 格式化数值显示
-            value_display = f"{value:.2f}" if isinstance(value, float) else str(value)
+            # 使用格式化方法显示数值
+            value_display = self._format_modifier_display(value, character_data, range_val)
             
-            lines.append(f"[{i + 1}] {source} {range_val} {value_display} {type_val} 持续: {duration}")
+            # 省略默认值的显示
+            type_display = f" [{type_val}]" if type_val and type_val != '通用' else ""
+            duration_display = f" 持续{duration}" if duration else ""
+            
+            lines.append(f"[{i + 1}] {source} {range_val} {value_display}{type_display}{duration_display}")
         
         return "\n".join(lines)
 
 
     def _schedule_modifier_event(self, conversation_id: str, user_id: str, modifier_id: str,
-                                  duration: str, source: str, range_val: str, value: float):
+                                  duration: str, source: str, range_val: str, value: float,
+                                  character_name: str = '未知角色'):
         """
         调度资源修饰到期事件
         """
         # 使用 infrastructure scheduler 避免循环引用
         from ...infrastructure.scheduler import schedule_event
-        
-        # 获取角色名
-        character = self._get_active_character(user_id)
-        if not character:
-            return
-        character_name = character.get('name', '未知角色')
         
         # 确定模式
         mode = 'time_based' if (isinstance(duration, str) and duration.endswith('t')) else 'count_based'
@@ -360,19 +426,6 @@ class ResourceModifierModule:
             mode=mode,
             event_type='modifier'
         )
-    
-    def _get_active_character(self, user_id: str) -> Optional[Dict]:
-        """获取用户当前激活的角色（同步版本）"""
-        from ..character.character import character_module
-        import asyncio
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(character_module.get_active_character(user_id))
-        finally:
-            loop.close()
-        return result
 
 
 def remove_expired_modifier(user_id: str, modifier_id: str) -> bool:

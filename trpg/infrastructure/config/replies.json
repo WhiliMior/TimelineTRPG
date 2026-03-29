@@ -179,7 +179,7 @@
     "resource_reset": "资源已重置",
     "hp_changed": "HP {change}{value}",
     "mp_changed": "MP {change}{value}",
-    "shield_added": "护盾增加: {value}",
+    "shield_added": "{type}护盾: {value}",
     "shield_expired": "护盾已到期",
     "resource_show": "当前资源状态:\n{hp}\n{mp}\n{shield}",
     "help": "rc 指令帮助"

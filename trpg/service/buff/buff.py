@@ -25,6 +25,67 @@ from ...infrastructure.attribute_resolver import AttributeResolver
 # Buff类型常量
 VALID_BUFF_TYPES = {"直接加算", "直接乘算", "最终加算", "最终乘算"}
 
+# 乘算类型（需要转换为小数存储）
+MULTIPLY_TYPES = {"直接乘算", "最终乘算"}
+
+
+def parse_buff_value(value_str: str, buff_type: str) -> float:
+    """
+    解析buff数值字符串
+    - 处理百分号：将20%转换为0.2
+    - 处理正负号：允许+20或-20格式
+    - 乘算类型：自动将百分比转换为小数
+    - 加算类型：保持原值
+    
+    Args:
+        value_str: 数值字符串，如 "20%", "+20%", "-20%", "20"
+        buff_type: buff类型，用于决定是否转换百分比
+    
+    Returns:
+        解析后的浮点数值
+    """
+    value_str = value_str.strip()
+    
+    # 检测是否包含百分号
+    has_percent = '%' in value_str
+    
+    # 移除百分号和空格
+    value_str = value_str.replace('%', '').strip()
+    
+    # 解析数值（支持正负号）
+    try:
+        value = float(value_str)
+    except ValueError:
+        raise ValueError(f"无效的数值: {value_str}")
+    
+    # 如果包含百分号且是乘算类型，转换为小数
+    if has_percent and buff_type in MULTIPLY_TYPES:
+        value = value / 100
+    
+    return value
+
+
+def format_buff_value(value: float, buff_type: str) -> str:
+    """
+    格式化buff数值用于显示
+    - 乘算类型：显示为百分比（如 +20%, -10%）
+    - 加算类型：显示为带正负号的数值（如 +30, -15）
+    
+    Args:
+        value: buff数值
+        buff_type: buff类型
+    
+    Returns:
+        格式化后的字符串
+    """
+    if buff_type in MULTIPLY_TYPES:
+        # 乘算类型显示为百分比
+        percent_value = value * 100
+        return f"{percent_value:+.0f}%"
+    else:
+        # 加算类型显示为数值
+        return f"{value:+.0f}"
+
 
 class BuffModule:
     """
@@ -94,9 +155,9 @@ class BuffModule:
                     duration = None
             
             try:
-                value = float(value_str)
-            except ValueError:
-                response = self.reply.render("invalid_value")
+                value = parse_buff_value(value_str, buff_type)
+            except ValueError as e:
+                response = str(e)
                 ctx.send(response)
                 return True
             
@@ -222,7 +283,8 @@ class BuffModule:
                                     resolved_attribute, buff_type, value, duration)
         
         duration_str = "永久" if duration is None else str(duration)
-        return self.reply.render("buff_added", name=buff_name, attribute=resolved_attribute, type=buff_type, value=value, duration=duration_str)
+        value_display = format_buff_value(value, buff_type)
+        return self.reply.render("buff_added", name=buff_name, attribute=resolved_attribute, type=buff_type, value=value_display, duration=duration_str)
     
     def _schedule_buff_event(self, conversation_id: str, user_id: str, character_name: str,
                            attribute: str, buff_type: str, buff_value: float, duration):
@@ -327,7 +389,9 @@ class BuffModule:
             btype = buff.get('type', '')
             val = buff.get('value', 0)
             dur = buff.get('duration', '永久')
-            lines.append(f"[{i + 1}] {name} {attr} {btype} {val} 持续: {dur}")
+            # 格式化数值显示
+            val_display = format_buff_value(val, btype)
+            lines.append(f"[{i + 1}] {name} {attr} {btype} {val_display} 持续: {dur}")
         
         return "\n".join(lines)
     

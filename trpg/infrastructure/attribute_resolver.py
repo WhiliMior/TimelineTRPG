@@ -83,8 +83,18 @@ ALL_ALIASES: Dict[str, str] = {**CHINESE_ALIASES, **ENGLISH_ALIASES}
 # 构建标准属性集合（用于快速查找）
 _STANDARD_ATTRIBUTE_SET: Set[str] = set(STANDARD_ATTRIBUTES)
 
-# 构建有效输入集合（标准属性 + 所有别名）
-_VALID_INPUTS: Set[str] = _STANDARD_ATTRIBUTE_SET | set(ALL_ALIASES.keys())
+# 构建有效输入集合（标准属性 + 所有别名 + 特殊范围）
+_SPECIAL_SCOPES: Set[str] = {"物理", "思维", "领域", "所有", "全部"}
+_VALID_INPUTS: Set[str] = _STANDARD_ATTRIBUTE_SET | set(ALL_ALIASES.keys()) | _SPECIAL_SCOPES
+
+# 特殊范围映射到属性列表
+SCOPE_ATTRIBUTES: Dict[str, List[str]] = {
+    "物理": ["体质", "力量", "敏捷"],
+    "思维": ["意志", "教育", "智力", "医学及生命科学", "工程与科技", "军事与生存", "文学", "视觉及表演艺术"],
+    "领域": ["医学及生命科学", "工程与科技", "军事与生存", "文学", "视觉及表演艺术"],
+    "所有": STANDARD_ATTRIBUTES,
+    "全部": STANDARD_ATTRIBUTES,
+}
 
 
 class AttributeResolver:
@@ -103,10 +113,10 @@ class AttributeResolver:
         解析属性输入，返回标准属性名
         
         Args:
-            input_attribute: 属性输入（可能是标准名或别名）
+            input_attribute: 属性输入（可能是标准名、别名或特殊范围）
         
         Returns:
-            标准属性名，如果输入不合法返回 None
+            标准属性名或特殊范围名，如果输入不合法返回 None
         
         Example:
             >>> AttributeResolver.resolve("力量")
@@ -115,6 +125,8 @@ class AttributeResolver:
             '力量'
             >>> AttributeResolver.resolve("医学")
             '医学及生命科学'
+            >>> AttributeResolver.resolve("物理")
+            '物理'
             >>> AttributeResolver.resolve("未知属性")
             None
         """
@@ -131,6 +143,10 @@ class AttributeResolver:
         # 检查是否是别名
         if input_attribute in ALL_ALIASES:
             return ALL_ALIASES[input_attribute]
+        
+        # 检查是否是特殊范围
+        if input_attribute in _SPECIAL_SCOPES:
+            return input_attribute
         
         return None
     
@@ -237,6 +253,43 @@ class AttributeResolver:
         
         # 如果是别名，返回带别名信息的展示
         return f"{standard}（别名：{input_attribute.strip()}）"
+    
+    @staticmethod
+    def is_scope(input_attribute: str) -> bool:
+        """
+        检查输入是否是特殊范围
+        
+        Args:
+            input_attribute: 属性输入
+        
+        Returns:
+            True 如果是特殊范围（物理、思维、所有/全部）
+        """
+        if not input_attribute:
+            return False
+        return input_attribute.strip() in _SPECIAL_SCOPES
+    
+    @staticmethod
+    def get_scope_attributes(scope: str) -> List[str]:
+        """
+        获取特殊范围对应的属性列表
+        
+        Args:
+            scope: 特殊范围名（物理、思维、所有/全部）
+        
+        Returns:
+            属性列表，如果范围不存在返回空列表
+        
+        Example:
+            >>> AttributeResolver.get_scope_attributes("物理")
+            ['体质', '力量', '敏捷']
+            >>> AttributeResolver.get_scope_attributes("思维")
+            ['意志', '教育', '智力', '医学及生命科学', ...]
+        """
+        scope = scope.strip()
+        if scope in SCOPE_ATTRIBUTES:
+            return SCOPE_ATTRIBUTES[scope]
+        return []
 
 
 # 全局单例
