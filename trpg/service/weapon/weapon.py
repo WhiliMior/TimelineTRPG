@@ -248,11 +248,14 @@ class WeaponModule:
                 result = await self._delete_all_weapons(user_id)
                 ctx.send(result)
             else:
-                try:
-                    index = int(ctx.args[1])
-                    result = await self._delete_weapon(user_id, index)
-                except ValueError:
+                # 支持多个数字输入，如 del 1 4 5
+                indices = [int(x) - 1 for x in ctx.args[1:] if x.isdigit()]
+                if not indices:
                     result = self.reply.render("invalid_number")
+                elif len(indices) == 1:
+                    result = await self._delete_weapon(user_id, indices[0])
+                else:
+                    result = await self._delete_multiple_weapons(user_id, indices)
                 ctx.send(result)
 
         elif command.isdigit():
@@ -510,6 +513,42 @@ class WeaponModule:
         await self._save_weapons(user_id, [])
 
         return self.reply.render("all_weapons_deleted")
+
+    async def _delete_multiple_weapons(self, user_id: str, indices: List[int]) -> str:
+        """删除多个武器"""
+        weapons = await self._get_weapons(user_id)
+
+        if not weapons:
+            return self.reply.render("weapon_list_empty")
+
+        # 验证序号
+        invalid_indices = []
+        valid_indices = []
+
+        for idx in indices:
+            if 0 <= idx < len(weapons):
+                valid_indices.append(idx)
+            else:
+                invalid_indices.append(idx + 1)
+
+        if not valid_indices:
+            return self.reply.render("invalid_index")
+
+        # 从后往前删除，避免索引偏移
+        for idx in sorted(valid_indices, reverse=True):
+            weapons.pop(idx)
+
+        if await self._save_weapons(user_id, weapons):
+            if invalid_indices:
+                return self.reply.render(
+                    "weapon_multi_deleted_partial",
+                    valid=len(valid_indices),
+                    invalid=len(invalid_indices)
+                )
+            else:
+                return self.reply.render("weapon_multi_deleted", count=len(valid_indices))
+        else:
+            return self.reply.render("save_failed")
 
     async def get_equipped_weapon(self, user_id: str) -> Optional[Dict]:
         """获取当前装备的武器"""

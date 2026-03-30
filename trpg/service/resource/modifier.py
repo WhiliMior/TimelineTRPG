@@ -91,18 +91,19 @@ class ResourceModifierModule:
                 response = self.reply.render("need_item_index")
                 ctx.send(response)
                 return True
-            
+
             if ctx.args[1].lower() == 'all':
                 result = await self._delete_all_modifiers(user_id)
                 ctx.send(result)
             else:
-                try:
-                    indices = [int(ctx.args[1]) - 1]
-                    result = await self._delete_modifier(user_id, indices)
-                    ctx.send(result)
-                except ValueError:
+                # 支持多个数字输入，如 del 1 4 5
+                indices = [int(x) - 1 for x in ctx.args[1:] if x.isdigit()]
+                if not indices:
                     response = self.reply.render("invalid_number")
                     ctx.send(response)
+                else:
+                    result = await self._delete_modifier(user_id, indices)
+                    ctx.send(result)
             return True
         
         # 检查是否是范围过滤

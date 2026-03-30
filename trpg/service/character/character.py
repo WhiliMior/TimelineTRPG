@@ -33,17 +33,16 @@ class CharacterModule:
     def help_entry(self) -> HelpEntry:
         return HelpEntry(
             module="chr",
-            usage="[序号|show|del]",
+            usage="[序号|show|del] [参数]",
             summary="角色管理",
             detail=(
-                "角色管理\n"
                 "- 显示角色列表\n"
-                "show - 查看角色参数\n"
+                "show - 查看当前角色参数\n"
                 "{序号} - 切换角色\n"
-                "del {序号} - 删除角色\n"
+                "del {序号} - 删除指定角色\n"
+                "del all - 删除所有角色\n"
                 "\n"
-                "创建角色 (.tlsetup)\n"
-                "格式: .tlsetup 名称:xxx,属性:值,..."
+                "创建角色: .tlsetup 名称:xxx,属性:值,..."
             ),
         )
     

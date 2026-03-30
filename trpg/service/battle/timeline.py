@@ -206,37 +206,64 @@ class TimelineModule:
     def _delete_timeline(self, storage_key: str, user_id: str, is_group: bool, arg: str) -> str:
         data = self._get_battle_data(storage_key, is_group)
         battle_list = data.get("battle_list", {})
-        
+
         if not battle_list:
             return self.reply.render("no_timelines")
-        
+
         if arg.lower() == 'all':
             data["battle_list"] = {}
             data["active_battle_id"] = None
             self._save_battle_data(storage_key, data, is_group)
             return self.reply.render("all_timelines_deleted")
-        
+
         # 按时间线ID排序
         sorted_ids = sorted(battle_list.keys(), key=lambda x: int(x) if x.isdigit() else 0)
-        
-        try:
-            index = int(arg) - 1
-            if index < 0 or index >= len(sorted_ids):
-                return self.reply.render("invalid_index")
-            
-            delete_id = sorted_ids[index]
+
+        # 支持多个数字输入，如 "1 4 5"
+        parts = arg.split()
+        indices = [int(x) - 1 for x in parts if x.isdigit()]
+
+        if not indices:
+            return self.reply.render("invalid_index")
+
+        # 验证所有序号
+        invalid_indices = []
+        valid_indices = []
+
+        for idx in indices:
+            if 0 <= idx < len(sorted_ids):
+                valid_indices.append(idx)
+            else:
+                invalid_indices.append(idx + 1)
+
+        if not valid_indices:
+            return self.reply.render("invalid_index")
+
+        # 从后往前删除，避免索引偏移
+        deleted_names = []
+        for idx in sorted(valid_indices, reverse=True):
+            delete_id = sorted_ids[idx]
             deleted = battle_list.pop(delete_id)
-            
+            deleted_names.append(deleted.get('name', '未命名'))
+
             # 调整 active_battle_id
             active = data.get("active_battle_id")
             if active == delete_id:
                 data["active_battle_id"] = None
-            
-            self._save_battle_data(storage_key, data, is_group)
-            
-            return self.reply.render("timeline_deleted", name=deleted.get('name', '未命名'))
-        except ValueError:
-            return self.reply.render("invalid_index")
+
+        self._save_battle_data(storage_key, data, is_group)
+
+        if len(valid_indices) == 1:
+            return self.reply.render("timeline_deleted", name=deleted_names[0])
+        else:
+            if invalid_indices:
+                return self.reply.render(
+                    "timeline_multi_deleted_partial",
+                    valid=len(valid_indices),
+                    invalid=len(invalid_indices)
+                )
+            else:
+                return self.reply.render("timeline_multi_deleted", count=len(valid_indices))
     
     def _set_accuracy(self, arg: str) -> str:
         """

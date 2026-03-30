@@ -56,13 +56,16 @@ class ResourceRecordModule:
     def help_entry(self) -> HelpEntry:
         return HelpEntry(
             module="rc",
-            usage="[hp/mp|护盾] [变化值] [持续时间] [f]",
+            usage="[hp/mp|护盾|reset|show] [变化值] [持续时间] [f]",
             summary="资源记录",
             detail=(
-                "{hp/mp} {变化值} (持续时间) (f) - 修改资源，f标记允许修改超过上限\n"
-                "护盾/s {变化值} (覆盖范围) (持续时间) (f) - 添加护盾资源\n"
+                "- 显示当前资源状态\n"
+                "{hp/mp} {变化值} (持续时间) (f) - 修改资源\n"
+                "护盾/s {变化值} (覆盖范围) (持续时间) (f) - 添加护盾\n"
                 "reset - 重置资源到最大值并清除护盾\n"
-                "show - 显示当前资源状态"
+                "show - 显示当前资源状态\n"
+                "\n"
+                "f 标记: 允许修改超过上限/下限"
             ),
         )
     

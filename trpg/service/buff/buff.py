@@ -185,13 +185,17 @@ class BuffModule:
                 result = await self._remove_all_buffs(user_id)
                 ctx.send(result)
             else:
-                try:
-                    index = int(ctx.args[1])
-                    result = await self._remove_buff_by_index(user_id, index)
-                    ctx.send(result)
-                except ValueError:
+                # 支持多个数字输入，如 del 1 4 5
+                indices = [int(x) - 1 for x in ctx.args[1:] if x.isdigit()]
+                if not indices:
                     response = self.reply.render("invalid_number")
                     ctx.send(response)
+                elif len(indices) == 1:
+                    result = await self._remove_buff_by_index(user_id, indices[0])
+                    ctx.send(result)
+                else:
+                    result = await self._remove_multiple_buffs(user_id, indices)
+                    ctx.send(result)
         
         elif command == 'show':
             if len(ctx.args) >= 2:
@@ -362,6 +366,42 @@ class BuffModule:
         
         await self._save_buffs(user_id, [])
         return self.reply.render("all_buffs_removed")
+
+    async def _remove_multiple_buffs(self, user_id: str, indices: List[int]) -> str:
+        """删除多个buff"""
+        buffs = await self._get_buffs(user_id)
+        
+        if not buffs:
+            return self.reply.render("no_buffs")
+
+        # 验证序号
+        invalid_indices = []
+        valid_indices = []
+
+        for idx in indices:
+            if 0 <= idx < len(buffs):
+                valid_indices.append(idx)
+            else:
+                invalid_indices.append(idx + 1)
+
+        if not valid_indices:
+            return self.reply.render("invalid_index")
+
+        # 从后往前删除，避免索引偏移
+        for idx in sorted(valid_indices, reverse=True):
+            buffs.pop(idx)
+
+        if await self._save_buffs(user_id, buffs):
+            if invalid_indices:
+                return self.reply.render(
+                    "buff_multi_deleted_partial",
+                    valid=len(valid_indices),
+                    invalid=len(invalid_indices)
+                )
+            else:
+                return self.reply.render("buff_multi_deleted", count=len(valid_indices))
+        else:
+            return self.reply.render("save_failed")
     
     async def _list_buffs(self, user_id: str, attribute: Optional[str] = None) -> str:
         """显示buff列表"""

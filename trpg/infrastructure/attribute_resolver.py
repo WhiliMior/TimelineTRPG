@@ -88,9 +88,13 @@ _SPECIAL_SCOPES: Set[str] = {"物理", "思维", "领域", "所有", "全部"}
 _VALID_INPUTS: Set[str] = _STANDARD_ATTRIBUTE_SET | set(ALL_ALIASES.keys()) | _SPECIAL_SCOPES
 
 # 特殊范围映射到属性列表
+# 注意：思维范围包括意志、教育、智力 + 所有领域属性
 SCOPE_ATTRIBUTES: Dict[str, List[str]] = {
     "物理": ["体质", "力量", "敏捷"],
-    "思维": ["意志", "教育", "智力", "医学及生命科学", "工程与科技", "军事与生存", "文学", "视觉及表演艺术"],
+    "思维": [
+        "意志", "教育", "智力",
+        "医学及生命科学", "工程与科技", "军事与生存", "文学", "视觉及表演艺术"
+    ],
     "领域": ["医学及生命科学", "工程与科技", "军事与生存", "文学", "视觉及表演艺术"],
     "所有": STANDARD_ATTRIBUTES,
     "全部": STANDARD_ATTRIBUTES,

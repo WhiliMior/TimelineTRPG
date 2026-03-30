@@ -112,7 +112,7 @@ class InventoryModule:
             ctx.send(result)
             return True
 
-        # 检查是否是删除命令: del {序号} 或 del all
+        # 检查是否是删除命令: del {序号} 或 del all 或 del 1 4 5
         if first_arg.lower() == "del":
             if len(ctx.args) == 1:
                 response = self.reply.render("need_item_index")
@@ -123,14 +123,18 @@ class InventoryModule:
             if second_arg.lower() == "all":
                 result = await self._clear_inventory(user_id)
                 ctx.send(result)
-            elif second_arg.isdigit():
-                try:
-                    index = int(second_arg) - 1
-                    result = await self._del_item(user_id, index)
-                    ctx.send(result)
-                except ValueError:
+            else:
+                # 支持多个数字输入，如 del 1 4 5
+                indices = [int(x) - 1 for x in ctx.args[1:] if x.isdigit()]
+                if not indices:
                     response = self.reply.render("invalid_index")
                     ctx.send(response)
+                elif len(indices) == 1:
+                    result = await self._del_item(user_id, indices[0])
+                    ctx.send(result)
+                else:
+                    result = await self._del_multiple_items(user_id, indices)
+                    ctx.send(result)
             return True
 
         # 检查是否是清空命令: all
@@ -505,6 +509,52 @@ class InventoryModule:
 
         if await self._save_inventory_data(user_id, inventory_data):
             return self.reply.render("item_deleted", name=removed.get("name", "未知"))
+        else:
+            return self.reply.render("save_failed")
+
+    async def _del_multiple_items(self, user_id: str, indices: List[int]) -> str:
+        """删除多个物品"""
+        character = await self._get_active_character(user_id)
+        if not character:
+            return self.reply.render("no_character")
+
+        # 首次调用时初始化背包
+        await self._initialize_inventory(user_id, character)
+
+        inventory_data = await self._get_inventory_data(user_id)
+        items = inventory_data.get("items", [])
+
+        if not items:
+            return self.reply.render("empty_inventory")
+
+        # 验证序号
+        invalid_indices = []
+        valid_indices = []
+
+        for idx in indices:
+            if 0 <= idx < len(items):
+                valid_indices.append(idx)
+            else:
+                invalid_indices.append(idx + 1)
+
+        if not valid_indices:
+            return self.reply.render("invalid_index")
+
+        # 从后往前删除，避免索引偏移
+        for idx in sorted(valid_indices, reverse=True):
+            items.pop(idx)
+
+        inventory_data["items"] = items
+
+        if await self._save_inventory_data(user_id, inventory_data):
+            if invalid_indices:
+                return self.reply.render(
+                    "item_multi_deleted_partial",
+                    valid=len(valid_indices),
+                    invalid=len(invalid_indices)
+                )
+            else:
+                return self.reply.render("item_multi_deleted", count=len(valid_indices))
         else:
             return self.reply.render("save_failed")
 
