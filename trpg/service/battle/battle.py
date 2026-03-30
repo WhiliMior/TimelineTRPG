@@ -106,7 +106,7 @@ class BattleModule:
         # bt 指令支持：属性命令、wp命令、undo、in、out、插入时间
         
         if main_command == 'wp':
-            result = self._weapon_battle(storage_key, user_id, is_group, ctx.args[1:] if len(ctx.args) > 1 else [])
+            result = await self._weapon_battle(storage_key, user_id, is_group, ctx.args[1:] if len(ctx.args) > 1 else [])
             ctx.send(result)
         
         elif main_command == 'undo':
@@ -981,15 +981,315 @@ class BattleModule:
         
         return "\n".join(lines)
     
-    def _weapon_battle(self, storage_key: str, user_id: str, is_group: bool, args: List[str]) -> str:
+    async def _weapon_battle(self, storage_key: str, user_id: str, is_group: bool, args: List[str]) -> str:
         """武器战斗指令（需要武器系统）"""
+        import math
+        from ..weapon.weapon import weapon_module
+        from ...infrastructure.character_reader import CharacterReader
+        
         battle = self._get_battle(storage_key, is_group)
         
         if not battle.get("name"):
             return self.reply.render("no_battle")
         
-        # TODO: 集成武器系统
-        return self.reply.render("weapon_battle_placeholder")
+        # 检查是否是装填指令
+        if args and args[0].lower() in ('re', 'reload', '装填'):
+            return await self._weapon_reload(user_id, battle, is_group)
+        
+        # 解析参数
+        if not args:
+            return "用法: .bt wp {时间}t/{影响值} (笔记)\n或: .bt wp re (装填火力武器)"
+        
+        value_str = args[0]
+        notes = " ".join(args[1:]) if len(args) > 1 else ""
+        
+        # 获取装备的武器
+        weapon = await weapon_module.get_equipped_weapon(user_id)
+        
+        if not weapon:
+            return "您当前没有装备武器"
+        
+        weapon_type = weapon.get('type', '')
+        weapon_name = weapon.get('name', '')
+        weapon_damage = weapon.get('damage', 0)
+        weapon_cast = weapon.get('cast', 0)  # 前摇
+        weapon_attribute = weapon.get('attribute', '')
+        
+        # 检查武器类型
+        if weapon_type == 'none':
+            return f"武器[{weapon_name}]为无类型，无法用于战斗"
+        
+        # 获取角色名
+        active_char = await self._get_active_character(user_id)
+        if not active_char:
+            return self.reply.render("no_character")
+        character_name = str(active_char.get('name', '未知角色'))
+        
+        # 增幅武器
+        if weapon_type == 'amplifier':
+            return await self._handle_amplifier_weapon(
+                user_id, battle, is_group, weapon, character_name,
+                weapon_name, weapon_damage, weapon_attribute, value_str, notes, storage_key
+            )
+        
+        # 火力武器
+        elif weapon_type == 'artillery':
+            return await self._handle_artillery_weapon(
+                user_id, battle, is_group, weapon, character_name,
+                weapon_name, weapon_damage, weapon_cast, value_str, notes, storage_key
+            )
+        
+        return f"不支持的武器类型: {weapon_type}"
+    
+    async def _handle_amplifier_weapon(self, user_id: str, battle: Dict, is_group: bool,
+                                        weapon: Dict, character_name: str,
+                                        weapon_name: str, damage: float,
+                                        attribute: str, value_str: str, notes: str,
+                                        storage_key: str) -> str:
+        """处理增幅武器"""
+        # 解析输入
+        is_time_input = value_str.endswith('t')
+        
+        if is_time_input:
+            try:
+                time_input = float(value_str.rstrip('t'))
+            except ValueError:
+                return "无效的时间值"
+            time_val = time_input
+        else:
+            try:
+                impact_input = float(value_str)
+            except ValueError:
+                return "无效的影响值"
+        
+        # 获取角色经过buff后的属性值
+        final_attr_value = CharacterReader.get_final_attribute(user_id, attribute)
+        if final_attr_value is None or final_attr_value == 0:
+            return f"未找到属性[{attribute}]或属性值为0"
+        
+        # 计算增幅后的属性值
+        amplified_attr = final_attr_value * (1 + damage / 100)
+        
+        if is_time_input:
+            impact_val = amplified_attr * time_input
+        else:
+            if amplified_attr == 0:
+                return "增幅后属性值为0，无法计算"
+            time_val = impact_input / amplified_attr
+            impact_val = impact_input
+        
+        # 格式化
+        time_val = game_config.round_value(time_val, "time")
+        impact_val = game_config.round_value(impact_val, "impact")
+        
+        # 添加战斗行动
+        return await self._add_action_with_weapon(
+            storage_key, user_id, is_group, character_name, attribute,
+            time_val, impact_val, weapon_name, notes
+        )
+    
+    async def _handle_artillery_weapon(self, user_id: str, battle: Dict, is_group: bool,
+                                        weapon: Dict, character_name: str,
+                                        weapon_name: str, damage: float, cast: float, 
+                                        value_str: str, notes: str,
+                                        storage_key: str) -> str:
+        """处理火力武器"""
+        import math
+        from ..weapon.weapon import weapon_module
+        
+        # 获取当前弹药数
+        current_load = weapon.get('current_load', 0)
+        max_load = weapon.get('load', 0)
+        
+        # 解析输入
+        is_time_input = value_str.endswith('t')
+        
+        if is_time_input:
+            try:
+                time_input = float(value_str.rstrip('t'))
+            except ValueError:
+                return "无效的时间值"
+            
+            if cast <= 0:
+                return "武器前摇为0，无法使用时间模式"
+            
+            # 计算最多可以打的子弹数（留一发子弹的时间）
+            max_bullets = int(time_input // cast)
+            
+            if max_bullets == 0:
+                return f"时间{time_input}t不足以发射任何子弹（前摇{cast}t）"
+            
+            actual_bullets = min(max_bullets, current_load)
+            remaining_bullets = current_load - actual_bullets
+            impact_val = actual_bullets * damage
+            time_val = actual_bullets * cast
+            
+        else:
+            try:
+                impact_input = float(value_str)
+            except ValueError:
+                return "无效的影响值"
+            
+            if damage <= 0:
+                return "武器伤害为0，无法造成伤害"
+            
+            needed_bullets = math.ceil(impact_input / damage)
+            
+            if current_load < needed_bullets:
+                actual_bullets = current_load
+                remaining_bullets = 0
+                impact_val = actual_bullets * damage
+            else:
+                actual_bullets = needed_bullets
+                remaining_bullets = current_load - needed_bullets
+                impact_val = impact_input
+            
+            time_val = actual_bullets * cast
+        
+        # 格式化
+        time_val = game_config.round_value(time_val, "time")
+        impact_val = game_config.round_value(impact_val, "impact")
+        
+        # 更新弹药数
+        await self._update_weapon_ammo(user_id, weapon, remaining_bullets)
+        
+        # 添加战斗行动
+        result = await self._add_action_with_weapon(
+            storage_key, user_id, is_group, character_name, "火力",
+            time_val, impact_val, weapon_name, notes
+        )
+        
+        # 添加弹药信息
+        ammo_info = f"\n[弹药: {remaining_bullets}/{max_load}]"
+        
+        return result + ammo_info
+    
+    async def _weapon_reload(self, user_id: str, battle: Dict, is_group: bool) -> str:
+        """火力武器装填"""
+        from ..weapon.weapon import weapon_module
+        
+        if not battle.get("name"):
+            return self.reply.render("no_battle")
+        
+        weapon = await weapon_module.get_equipped_weapon(user_id)
+        
+        if not weapon:
+            return "您当前没有装备武器"
+        
+        if weapon.get('type') != 'artillery':
+            return f"武器[{weapon.get('name')}]不是火力武器，无法装填"
+        
+        reload_time = weapon.get('reload_time', 0)
+        max_load = weapon.get('load', 0)
+        
+        if reload_time <= 0:
+            return f"武器[{weapon.get('name')}]没有装填时间"
+        
+        # 装填弹药
+        await self._update_weapon_ammo(user_id, weapon, max_load)
+        
+        active_char = await self._get_active_character(user_id)
+        if not active_char:
+            return self.reply.render("no_character")
+        character_name = str(active_char.get('name', '未知角色'))
+        
+        storage_key = f"{battle.get('conversation_id', 'default')}"
+        
+        # 添加装填行动
+        result = await self._add_action_with_weapon(
+            storage_key, user_id, is_group, character_name, "火力",
+            reload_time, 0, weapon.get('name'), "装填"
+        )
+        
+        return result + f"\n[装填完成: {max_load}/{max_load}]"
+    
+    async def _update_weapon_ammo(self, user_id: str, weapon: Dict, new_ammo: int):
+        """更新武器弹药数"""
+        from ..weapon.weapon import weapon_module
+        
+        weapons = await weapon_module._get_weapons(user_id)
+        
+        for w in weapons:
+            if w.get('name') == weapon.get('name'):
+                w['current_load'] = new_ammo
+                break
+        
+        await weapon_module._save_weapons(user_id, weapons)
+    
+    async def _add_action_with_weapon(self, storage_key: str, user_id: str, is_group: bool,
+                                       character_name: str, attribute: str,
+                                       time_val: float, impact_val: float,
+                                       weapon_name: str, notes: str) -> str:
+        """添加武器战斗行动"""
+        battle = self._get_battle(storage_key, is_group)
+        
+        # 确保 participants 结构正确
+        if "participants" not in battle:
+            battle["participants"] = {}
+        
+        if user_id not in battle["participants"]:
+            battle["participants"][user_id] = {}
+        
+        if character_name not in battle["participants"][user_id]:
+            battle["participants"][user_id][character_name] = {
+                "status": "参与中",
+                "last_action_time": 0
+            }
+        
+        participant = battle["participants"][user_id][character_name]
+        
+        # 计算时间点
+        start_time = participant.get('last_action_time', 0)
+        new_time_point = start_time + time_val
+        new_time_point = self._format_time(new_time_point)
+        
+        # 格式化
+        formatted_time = self._format_time(time_val)
+        formatted_impact = self._format_impact(impact_val)
+        
+        # 创建行动记录
+        action = {
+            "user_id": user_id,
+            "character_name": character_name,
+            "start_time": self._format_time(start_time),
+            "lead_time": formatted_time,
+            "attribute_used": attribute,
+            "impact_value": formatted_impact,
+            "notes": notes,
+            "weapon": weapon_name,
+            "using_weapon": True
+        }
+        
+        # 添加到时间轴
+        if "timeline" not in battle:
+            battle["timeline"] = {}
+        
+        time_str = str(new_time_point)
+        if time_str not in battle["timeline"]:
+            battle["timeline"][time_str] = []
+        battle["timeline"][time_str].append(action)
+        
+        # 更新参与者最后行动时间
+        participant['last_action_time'] = new_time_point
+        
+        # 更新最大时间
+        current_max = battle.get('max_time', 0)
+        battle['max_time'] = max(current_max, new_time_point)
+        
+        # 重新计算当前时间
+        self._recalculate_current_time(battle)
+        
+        # 保存战斗数据
+        self._save_battle(storage_key, battle, is_group)
+        
+        # 递减当前角色的计数模式buff事件
+        self._decrement_count_based_events(storage_key, user_id, character_name, is_group)
+        
+        # 执行到期的定时事件
+        executed = self.execute_scheduled_events(storage_key, user_id, is_group)
+        
+        # 格式化输出
+        return f"{character_name}: {formatted_impact}\n{formatted_time}t ({formatted_time}t) : {formatted_impact}\n{weapon_name}\n{notes}"
     
     def schedule_buff_event(self, conversation_id: str, user_id: str, character_name: str,
                           action_description: str, duration_or_count: float,

@@ -295,20 +295,26 @@ class WeaponModule:
             return self.reply.render("no_character")
         
         # 设置默认值
+        weapon_type = weapon_data.get('type', 'none')
         weapon = {
             'name': weapon_data.get('name', ''),
-            'type': weapon_data.get('type', 'none'),
+            'type': weapon_type,
             'attribute': weapon_data.get('attribute', ''),
             'damage': weapon_data.get('damage', 0),
             'cast': weapon_data.get('cast', 0),
             'range': weapon_data.get('range', 0),
-            'load': weapon_data.get('load', ''),
-            'current_load': weapon_data.get('current_load', ''),
+            'load': weapon_data.get('load', 0),
             'reload_time': weapon_data.get('reload_time', 0),
             'weight': weapon_data.get('weight', 0),
             'note': weapon_data.get('note', ''),
             'equipped': False
         }
+        
+        # 火力武器需要初始化当前弹药数
+        if weapon_type == 'artillery':
+            weapon['current_load'] = weapon_data.get('load', 0)
+        else:
+            weapon['current_load'] = weapon_data.get('current_load', 0)
         
         # 处理重量精度
         if weapon['weight']:
