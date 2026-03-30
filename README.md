@@ -39,6 +39,7 @@
 
 # 插件层 (data/plugins/)
 ### 文件结构
+```  <!-- 添加这里 -->
 TimelineTRPG/
 ├── main.py            # 插件入口点
 ├── metadata.yaml      # 插件元信息
@@ -53,34 +54,37 @@ TimelineTRPG/
     │   └── ...
     ├── infrastructure/ # 基础设施（配置、JSON处理）
     └── adapter/       # 外部适配器
+```  <!-- 添加这里 -->
 
 ### 项目架构
+```  <!-- 添加这里 -->
 AstrBot 消息
     │
     ▼
 ┌──────────────────────────────┐
-│       插件 adapter 层        │  ← 消息入口、指令解析
-│  command_context / router    │
+│       插件 adapter 层        │ ← 消息入口、指令解析
+│  command_context / router   │
 │  reply / help                │
 └──────────────┬───────────────┘
-               │  Router 路由分发
+               │ Router 路由分发
                ▼
 ┌──────────────────────────────┐
-│       插件 service 层        │  ← TRPG 业务逻辑（骰子、检定、战斗……）
+│       插件 service 层        │ ← TRPG 业务逻辑（骰子、检定、战斗……）
 │  roll_dice / examination     │
 │  character / battle / ...    │
 └──────────────┬───────────────┘
-               │  调用
+               │ 调用
                ▼
 ┌──────────────────────────────┐
-│    插件 infrastructure 层    │  ← 通用方法与数据持久化
+│    插件 infrastructure 层    │ ← 通用方法与数据持久化
 │  character_repo / save_data  │
 └──────────────┬───────────────┘
-               │  读写
+               │ 读写
                ▼
 ┌──────────────────────────────┐
-│    data/plugin_data/         │  ← 角色数据、背包、武器、状态……
+│    data/plugin_data/         │ ← 角色数据、背包、武器、状态……
 └──────────────────────────────┘
+```  <!-- 添加这里 -->
 
 # Supports
 
