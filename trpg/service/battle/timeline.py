@@ -246,21 +246,21 @@ class TimelineModule:
         if not arg:
             current_precision = game_config.get_precision("time")
             min_unit = game_config.get_min_time_unit()
-            return f"当前时间精度: {current_precision} 位小数 (最小时间单位: {min_unit}t)"
+            return self.reply.render("timeline_current_accuracy", precision=current_precision, min_unit=min_unit)
         
         try:
             precision = int(arg)
             if precision < 0 or precision > 5:
-                return "精度范围: 0-5"
-            
+                return self.reply.render("precision_range")
+
             # 设置时间精度
             if game_config.set_precision("time", precision):
                 min_unit = game_config.get_min_time_unit()
-                return f"时间精度已设置为: {precision} 位小数 (最小时间单位: {min_unit}t)"
+                return self.reply.render("timeline_accuracy_set", precision=precision, min_unit=min_unit)
             else:
-                return "保存配置失败"
+                return self.reply.render("save_config_failed")
         except ValueError:
-            return "请输入有效的数字"
+            return self.reply.render("invalid_number")
     
     def _show_timeline(self, storage_key: str, user_id: str, is_group: bool, character_name: Optional[str]) -> str:
         data = self._get_battle_data(storage_key, is_group)

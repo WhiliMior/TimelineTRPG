@@ -94,6 +94,7 @@
     "timeline_header": "=== {name} ===\n",
     "timeline_current_max_time": "当前时间: {current}t\n最大时间: {max}t",
     "timeline_accuracy_set": "时间精度已设置为: {precision}位小数",
+    "timeline_current_accuracy": "当前时间精度: {precision}位小数 (最小时间单位: {min_unit}t)",
     "timeline_current_accuracy": "当前时间精度: {precision}位小数(最小时间单位: {min_unit}t)",
     "time_point_not_found": "未找到时间点 {time}",
     "need_battle_name": "请输入时间线名称",
@@ -105,6 +106,9 @@
     "battle_name_exists": "时间线 {name} 已存在",
     "invalid_time_format": "无效的时间格式",
     "time_exceeds_max": "查询时间 {time} 超过最大时间 {max}",
+    "precision_range": "精度范围: 0-5",
+    "save_config_failed": "保存配置失败",
+    "invalid_number": "请输入有效的数字",
     "help": "tl 指令帮助"
   },
   "battle": {
@@ -152,13 +156,28 @@
     "input_error": "指令格式错误",
     "invalid_time_value": "无效的时间值",
     "invalid_impact_value": "无效的影响值",
-    "invalid_input": "无效的输入"
+    "invalid_input": "无效的输入",
+    "wp_usage": "用法: .bt wp {时间}t/{影响值} (笔记)\\n或: .bt wp re (装填火力武器)",
+    "no_weapon_equipped": "您当前没有装备武器",
+    "weapon_type_none": "武器[{name}]为无类型，无法用于战斗",
+    "weapon_type_unsupported": "不支持的武器类型: {type}",
+    "attribute_not_found_or_zero": "未找到属性[{attribute}]或属性值为0",
+    "invalid_time": "无效的时间值",
+    "invalid_impact": "无效的影响值",
+    "amplified_attr_zero": "增幅后属性值为0，无法计算",
+    "fire_attribute_not_found_or_zero": "未找到火力属性或属性值为0",
+    "weapon_cast_zero": "武器前摇为0，无法使用时间模式",
+    "time_insufficient_for_bullets": "时间{time}t不足以发射任何子弹（前摇{cast}t）",
+    "weapon_not_artillery": "武器[{name}]不是火力武器，无法装填",
+    "weapon_no_reload_time": "武器[{name}]没有装填时间"
   },
   "inventory": {
     "no_character": "您当前没有激活的角色，请先创建并激活一个角色。",
     "empty_inventory": "背包是空的",
     "inventory_header": "=== 背包 ===\n",
     "item_added": "已添加物品: {name} x{quantity}",
+    "item_removed": "已移除物品: {name} x{quantity}",
+    "item_weight_auto": "已自动获取物品重量: {name} 负重:{weight}",
     "item_deleted": "已删除物品: {name}",
     "inventory_cleared": "背包已清空",
     "need_item_name": "请输入物品名称",
@@ -186,6 +205,9 @@
     "shield_added": "{type}护盾: {value}",
     "shield_expired": "护盾已到期",
     "resource_show": "当前资源状态:\n{hp}\n{mp}\n{shield}",
+    "no_constitution_attribute": "未找到体质属性，请先设置角色属性",
+    "no_willpower_attribute": "未找到意志属性，请先设置角色属性",
+    "no_attribute_for_resource": "未找到{attribute}属性，请先设置角色属性",
     "help": "rc 指令帮助"
   },
   "weapon": {
@@ -201,6 +223,8 @@
     "invalid_index": "无效的武器序号",
     "invalid_number": "请输入有效的武器序号",
     "weapon_list_empty": "您还没有武器，请先创建武器",
+    "weapon_type_none": "无类型",
+    "wp_create_usage": "用法: wp create {名称} {类型} {属性} (伤害) (射程)\\n类型: 斩击/打击/投射/火力/其他\\n属性: 力量/敏捷/智力等",
     "help": "wp 指令帮助"
   },
   "level": {

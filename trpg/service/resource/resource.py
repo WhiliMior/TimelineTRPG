@@ -548,7 +548,7 @@ class ResourceRecordModule:
         
         if max_value is None:
             attr_name = '体质' if resource_type == 'hp' else '意志'
-            return f"未找到{attr_name}属性，请先设置角色属性"
+            return self.reply.render("no_attribute_for_resource", attribute=attr_name)
         
         # 解析变化值
         value_str = args[0]
@@ -779,12 +779,12 @@ class ResourceRecordModule:
             return self.reply.render("no_character")
         
         max_hp, max_mp = await self._get_max_resources(user_id)
-        
+
         if max_hp is None:
-            return "未找到体质属性，请先设置角色属性"
-        
+            return self.reply.render("no_constitution_attribute")
+
         if max_mp is None:
-            return "未找到意志属性，请先设置角色属性"
+            return self.reply.render("no_willpower_attribute")
         
         # 重置资源
         resources = {
