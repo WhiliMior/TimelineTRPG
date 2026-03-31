@@ -5,6 +5,7 @@
 使用 CharacterReader 获取最终属性，支持 buff/debuff 显示。
 """
 
+import logging
 import math
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from PIL import Image as PilImage, ImageFont, ImageDraw
+
+logger = logging.getLogger("TimelineTRPG.character_picture")
 
 from .storage import StorageBackend, StorageType
 from .character_reader import CharacterReader
@@ -161,14 +164,18 @@ class CharacterPictureGenerator:
             plugin_root = Path(__file__).parent.parent.parent
             local_font_path = plugin_root / cls.FONT_DIR / "Noto_Sans_SC" / font_file
             
+            logger.debug(f"尝试加载字体: {local_font_path}")
+            logger.debug(f"字体文件是否存在: {local_font_path.exists()}")
+            
             font_loaded = False
             # 1. 首先尝试插件自带字体
             if local_font_path.exists():
                 try:
                     cls._font_cache[cache_key] = ImageFont.truetype(str(local_font_path), size)
                     font_loaded = True
-                except Exception:
-                    pass
+                    logger.info(f"成功加载插件字体: {local_font_path}, size={size}")
+                except Exception as e:
+                    logger.warning(f"加载插件字体失败: {e}")
             
             # 2. 插件字体失败，尝试系统字体
             if not font_loaded:
@@ -182,12 +189,14 @@ class CharacterPictureGenerator:
                     try:
                         cls._font_cache[cache_key] = ImageFont.truetype(font_name, size)
                         font_loaded = True
+                        logger.info(f"成功加载系统字体: {font_name}, size={size}")
                         break
-                    except Exception:
-                        continue
+                    except Exception as e:
+                        logger.debug(f"系统字体 {font_name} 不存在或加载失败: {e}")
             
             # 3. 都失败则使用默认字体（显示方框）
             if not font_loaded:
+                logger.warning(f"所有字体加载失败，使用PIL默认字体，显示可能异常")
                 cls._font_cache[cache_key] = ImageFont.load_default()
         
         return cls._font_cache[cache_key]
