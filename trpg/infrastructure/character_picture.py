@@ -180,10 +180,12 @@ class CharacterPictureGenerator:
             # 2. 插件字体失败，尝试系统字体
             if not font_loaded:
                 system_fonts = [
-                    "msyh.ttc",          # Windows 微软雅黑
-                    "PingFang.ttc",      # macOS
-                    "Heiti.ttc",         # macOS 黑体
-                    "SimHei.ttf",        # Windows 黑体
+                    "NotoSansCJK-Regular.ttc",  # Linux/Debian Noto CJK
+                    "NotoSansSC-Regular.ttf",   # Linux Noto Sans SC
+                    "msyh.ttc",                 # Windows 微软雅黑
+                    "PingFang.ttc",             # macOS
+                    "Heiti.ttc",                # macOS 黑体
+                    "SimHei.ttf",               # Windows 黑体
                 ]
                 for font_name in system_fonts:
                     try:
