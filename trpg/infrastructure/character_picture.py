@@ -52,10 +52,15 @@ class CharacterPictureGenerator:
     """
     
     # 字体配置
-    FONT_DEFAULT = 'msyh.ttc'
+    # 优先使用插件自带的思源黑体Variable字体，跨平台兼容
+    FONT_DEFAULT = 'NotoSansSC-VariableFont_wght.ttf'
+    FONT_BOLD = 'NotoSansSC-Bold.ttf'
     FONT_SIZE_LARGE = 33
     FONT_SIZE_SMALL = 28
     FONT_SIZE_BUFF = 24  # buff字体大小（比属性字体小）
+    
+    # 插件字体目录（相对于插件根目录）
+    FONT_DIR = "fonts"
     
     # 颜色配置
     COLOR_BLACK = (0, 0, 0)
@@ -139,13 +144,52 @@ class CharacterPictureGenerator:
     
     @classmethod
     def get_font(cls, size: int) -> ImageFont.FreeTypeFont:
-        """获取字体（带缓存）"""
-        cache_key = (cls.FONT_DEFAULT, size)
+        """获取字体（带缓存，优先使用插件自带字体）"""
+        return cls._load_font(cls.FONT_DEFAULT, size)
+    
+    @classmethod
+    def get_bold_font(cls, size: int) -> ImageFont.FreeTypeFont:
+        """获取粗体字体（带缓存）"""
+        return cls._load_font(cls.FONT_BOLD, size)
+    
+    @classmethod
+    def _load_font(cls, font_file: str, size: int) -> ImageFont.FreeTypeFont:
+        """加载字体的内部方法（带缓存）"""
+        cache_key = (font_file, size)
         if cache_key not in cls._font_cache:
-            try:
-                cls._font_cache[cache_key] = ImageFont.truetype(cls.FONT_DEFAULT, size)
-            except Exception:
+            # 优先尝试从插件字体目录加载
+            plugin_root = Path(__file__).parent.parent.parent
+            local_font_path = plugin_root / cls.FONT_DIR / "Noto_Sans_SC" / font_file
+            
+            font_loaded = False
+            # 1. 首先尝试插件自带字体
+            if local_font_path.exists():
+                try:
+                    cls._font_cache[cache_key] = ImageFont.truetype(str(local_font_path), size)
+                    font_loaded = True
+                except Exception:
+                    pass
+            
+            # 2. 插件字体失败，尝试系统字体
+            if not font_loaded:
+                system_fonts = [
+                    "msyh.ttc",          # Windows 微软雅黑
+                    "PingFang.ttc",      # macOS
+                    "Heiti.ttc",         # macOS 黑体
+                    "SimHei.ttf",        # Windows 黑体
+                ]
+                for font_name in system_fonts:
+                    try:
+                        cls._font_cache[cache_key] = ImageFont.truetype(font_name, size)
+                        font_loaded = True
+                        break
+                    except Exception:
+                        continue
+            
+            # 3. 都失败则使用默认字体（显示方框）
+            if not font_loaded:
                 cls._font_cache[cache_key] = ImageFont.load_default()
+        
         return cls._font_cache[cache_key]
     
     @classmethod
@@ -393,7 +437,7 @@ class CharacterPictureGenerator:
     @classmethod
     def _draw_hp_mp(cls, draw: ImageDraw.Draw, data: Dict):
         """绘制HP/MP - 两行格式"""
-        font_large = cls.get_font(cls.FONT_SIZE_LARGE)
+        font_large = cls.get_bold_font(cls.FONT_SIZE_LARGE)
         
         # 向上移动一行（体质与敏捷间距66像素，半行约33像素）
         offset_y = -33
@@ -479,7 +523,7 @@ class CharacterPictureGenerator:
                 pass
         if text_color is None:
             text_color = cls.COLOR_BLACK
-        draw.text(text_coord, text, text_color, font=cls.get_font(font_size))
+        draw.text(text_coord, text, text_color, font=cls.get_bold_font(font_size))
     
     @classmethod
     def _draw_revisions(cls, img: PilImage.Image, draw: ImageDraw.Draw, data: Dict):
@@ -521,7 +565,7 @@ class CharacterPictureGenerator:
         font_size: int,
     ):
         """绘制属性值和buff差异"""
-        font = cls.get_font(font_size)
+        font = cls.get_bold_font(font_size)
         
         if buff_amount != 0:
             # 有buff，显示差异（带颜色）
