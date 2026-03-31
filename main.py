@@ -4,11 +4,15 @@ TimelineTRPG 插件主入口
 业务模块完全不接触 AstrBot API，完全解耦。
 """
 import re
+import os
+import asyncio
+from pathlib import Path
 from typing import Generator
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.api.message_components import Image
 
 # 导入 adapter 层（使用相对导入，与 qq_group_daily_analysis 保持一致）
 from .trpg.adapter.command_context import CommandContext
@@ -223,7 +227,32 @@ class TimelineTRPG(Star):
                 return
 
             for payload in ctx.reply_payloads:
-                yield event.plain_result(payload.text)
+                # 检查是否为图片消息
+                if payload.is_image():
+                    image_path = payload.image_path
+                    delete_after = payload.image_delete_after_send
+                    
+                    try:
+                        # 先发送文本说明（如果有）
+                        if payload.text:
+                            yield event.plain_result(payload.text)
+                        
+                        # 发送图片
+                        await self._send_image(event, image_path)
+                        
+                        # 发送后删除图片
+                        if delete_after and os.path.exists(image_path):
+                            try:
+                                os.remove(image_path)
+                                logger.debug(f"[{PLUGIN_NAME}] 已删除临时图片: {image_path}")
+                            except Exception as e:
+                                logger.warning(f"[{PLUGIN_NAME}] 删除临时图片失败: {e}")
+                    except Exception as e:
+                        logger.error(f"[{PLUGIN_NAME}] 发送图片失败: {e}")
+                        yield event.plain_result(f"图片发送失败: {str(e)}")
+                else:
+                    # 普通文本消息
+                    yield event.plain_result(payload.text)
                 
         except Exception as e:
             import traceback
@@ -234,6 +263,45 @@ class TimelineTRPG(Star):
                 f"  traceback: {traceback.format_exc(limit=5)}"
             )
             yield event.plain_result(self.system_reply.render("internal_error", error=str(e)))
+    
+    async def _send_image(self, event: AstrMessageEvent, image_path: str):
+        """
+        发送图片消息
+        
+        Args:
+            event: 消息事件
+            image_path: 图片路径
+        """
+        p = Path(image_path)
+        
+        if not p.exists():
+            raise FileNotFoundError(f"图片文件不存在: {image_path}")
+        
+        # 尝试多种方式发送图片
+        # 方式1: fromFileSystem
+        try:
+            await event.send(event.chain_result([Image.fromFileSystem(str(p))]))
+            return
+        except Exception as e:
+            logger.debug(f"[{PLUGIN_NAME}] fromFileSystem 失败，尝试其他方式: {e}")
+        
+        # 方式2: fromBytes
+        try:
+            data = await asyncio.to_thread(p.read_bytes)
+            await event.send(event.chain_result([Image.fromBytes(data)]))
+            return
+        except Exception as e:
+            logger.debug(f"[{PLUGIN_NAME}] fromBytes 失败: {e}")
+        
+        # 方式3: 作为文件发送
+        try:
+            await event.send(event.chain_result([Image.fromFileSystem(str(p))]))
+            return
+        except Exception as e:
+            logger.debug(f"[{PLUGIN_NAME}] 文件发送失败: {e}")
+        
+        # 如果都失败，抛出异常
+        raise RuntimeError(f"无法发送图片: {image_path}")
     
     async def _parse_args(self, args_str: str) -> list[str]:
         """解析参数字符串"""

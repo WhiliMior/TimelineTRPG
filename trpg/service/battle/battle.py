@@ -21,6 +21,7 @@ from ...infrastructure.storage import StorageBackend
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.attribute_resolver import AttributeResolver
 from ...infrastructure.character_reader import CharacterReader
+from ...infrastructure.timeline_formatter import timeline_formatter
 
 
 class BattleModule:
@@ -1013,95 +1014,17 @@ class BattleModule:
         else:
             battle["current_time"] = 0
 
-    def _format_timeline_display(self, battle: Dict) -> str:
-        """格式化时间轴显示"""
-        timeline = battle.get("timeline", {})
-        if not timeline:
-            return self.reply.render("empty_timeline")
+    def _format_timeline_display(self, battle: Dict, attribute_label: str = "属性", extra_info: Dict = None) -> str:
+        """格式化时间轴显示（使用统一格式化器）
 
-        # 按时间点排序
-        sorted_times = sorted([float(t) for t in timeline.keys()])
-
-        current_time = battle.get("current_time", 0)
-        max_time = battle.get("max_time", 0)
-
-        lines = [
-            self.reply.render("timeline_header", name=battle.get("name", "未知战斗")),
-            self.reply.render(
-                "timeline_current_max_time",
-                current=self._format_time(current_time),
-                max=self._format_time(max_time),
-            ),
-        ]
-
-        for time_point in sorted_times:
-            if time_point < current_time:
-                continue
-
-            time_str = (
-                f"{time_point:.1f}" if time_point.is_integer() else f"{time_point}"
-            )
-            actions = timeline.get(time_str, [])
-
-            if actions:
-                # 过滤：只显示每个角色在该时间点的最新行动
-                # 按 user_id + character_name 分组，保留最后一个
-                latest_actions_by_character = {}
-                for action in actions:
-                    key = (action["user_id"], action["character_name"])
-                    latest_actions_by_character[key] = action
-
-                # 时间分隔符
-                dashes = "—" * 5
-                lines.append(f"\n{dashes} {time_str}t {dashes}")
-
-                for (user_id, char_name), action in latest_actions_by_character.items():
-                    # 检查角色状态
-                    user_participants = battle["participants"].get(user_id, {})
-                    char_info = user_participants.get(char_name, {})
-
-                    if char_info.get("status") != "参与中":
-                        continue
-
-                    # 显示行动
-                    start_time = self._format_time(action["start_time"])
-                    lead_time = self._format_time(action["lead_time"])
-                    impact_value = self._format_impact(action["impact_value"])
-
-                    lines.append(f"  [{action['character_name']}]")
-                    lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
-                    lines.append(
-                        f"    属性: {action['attribute_used']} | 影响: {impact_value}"
-                    )
-                    if action.get("notes"):
-                        lines.append(f"    {action['notes']}")
-
-        # 显示定时事件
-        scheduled_events = battle.get("scheduled_events", [])
-        time_based_events = [
-            e
-            for e in scheduled_events
-            if e.get("mode") == "time_based"
-            and e.get("end_time")
-            and current_time < e.get("end_time", 0)
-        ]
-
-        if time_based_events:
-            lines.append("\n【定时事件】")
-            for event in time_based_events:
-                # 优先显示回调消息，否则显示行动描述
-                event_desc = event.get("callback_message") or event.get(
-                    "action_description", ""
-                )
-                lines.append(
-                    self.reply.render(
-                        "scheduled_event_display",
-                        time=event.get("end_time", 0),
-                        desc=event_desc,
-                    )
-                )
-
-        return "\n".join(lines)
+        Args:
+            battle: 战斗数据
+            attribute_label: 属性列标签（"属性"或"武器"）
+            extra_info: 额外信息（如弹药）
+        """
+        return timeline_formatter.format_timeline(
+            battle, attribute_label=attribute_label, extra_info=extra_info
+        )
 
     async def _weapon_battle(
         self, storage_key: str, user_id: str, is_group: bool, args: List[str]
@@ -1333,8 +1256,11 @@ class BattleModule:
         # 更新弹药数
         await self._update_weapon_ammo(user_id, weapon, remaining_bullets)
 
+        # 传递弹药信息
+        extra_info = {"ammo": {"current": remaining_bullets, "max": max_load}}
+
         # 添加战斗行动
-        result = await self._add_action_with_weapon(
+        return await self._add_action_with_weapon(
             storage_key,
             user_id,
             is_group,
@@ -1344,12 +1270,8 @@ class BattleModule:
             impact_val,
             weapon_name,
             notes,
+            extra_info=extra_info,
         )
-
-        # 添加弹药信息
-        ammo_info = f"\n[弹药: {remaining_bullets}/{max_load}]"
-
-        return result + ammo_info
 
     async def _weapon_reload(self, user_id: str, battle: Dict, is_group: bool) -> str:
         """火力武器装填"""
@@ -1421,8 +1343,22 @@ class BattleModule:
         impact_val: float,
         weapon_name: str,
         notes: str,
+        extra_info: Dict = None,
     ) -> str:
-        """添加武器战斗行动"""
+        """添加武器战斗行动
+
+        Args:
+            storage_key: 会话ID
+            user_id: 用户ID
+            is_group: 是否为群聊
+            character_name: 角色名
+            attribute: 属性名
+            time_val: 时间值
+            impact_val: 影响值
+            weapon_name: 武器名
+            notes: 备注
+            extra_info: 额外信息字典（如弹药 {"ammo": {"current": 5, "max": 10}}）
+        """
         battle = self._get_battle(storage_key, is_group)
 
         # 确保 participants 结构正确
@@ -1492,8 +1428,17 @@ class BattleModule:
         # 执行到期的定时事件
         executed = self.execute_scheduled_events(storage_key, user_id, is_group)
 
-        # 格式化输出
-        return f"{character_name}: {formatted_impact}\n{formatted_time}t ({formatted_time}t) : {formatted_impact}\n{weapon_name}\n{notes}"
+        # 格式化输出 - 使用统一的 timeline 格式化器
+        timeline_result = self._format_timeline_display(
+            battle, attribute_label="武器", extra_info=extra_info
+        )
+
+        # 如果有到期事件，将消息添加到返回结果中
+        if executed:
+            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
+            return timeline_result + event_msgs
+
+        return timeline_result
 
     def schedule_buff_event(
         self,

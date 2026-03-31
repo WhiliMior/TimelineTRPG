@@ -17,16 +17,31 @@ class ReplyPayload:
     
     业务模块调用 ctx.send(text) 时实际创建的是这个对象，
     由 main.py 统一转换为 AstrBot 的 event.plain_result() 调用。
+    
+    支持两种模式：
+    - text 模式：普通文本消息
+    - image 模式：图片消息，需要提供 image_path
     """
-    text: str
+    text: str = ""
     metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    # 图片相关字段
+    image_path: str | None = None
+    image_delete_after_send: bool = True  # 发送后是否删除图片
+    
+    def is_image(self) -> bool:
+        """判断是否为图片消息"""
+        return self.image_path is not None and len(self.image_path) > 0
     
     def to_dict(self) -> dict[str, str | dict[str, str | int | float | bool | None]]:
         """转换为字典格式，便于序列化或调试"""
-        return {
+        result = {
             "text": self.text,
             "metadata": self.metadata
         }
+        if self.is_image():
+            result["image_path"] = self.image_path
+            result["image_delete_after_send"] = self.image_delete_after_send
+        return result
 
 
 class ReplyManager:

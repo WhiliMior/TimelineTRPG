@@ -64,6 +64,29 @@ class CommandContext:
         """
         self.reply_payloads.append(payload)
     
+    def send_image(
+        self,
+        image_path: str,
+        delete_after_send: bool = True,
+        text: str = "",
+    ) -> None:
+        """
+        发送图片消息
+        
+        Args:
+            image_path: 图片文件路径
+            delete_after_send: 发送成功后是否删除图片文件
+            text: 附带说明文本（可选）
+        """
+        payload = ReplyPayload(
+            text=text,
+            metadata={"type": "image"},
+            image_path=image_path,
+            image_delete_after_send=delete_after_send,
+        )
+        self.reply_payloads.append(payload)
+        logger.debug(f"[{self.command}] Image: {image_path}")
+    
     def get_reply_texts(self) -> list[str]:
         """
         获取所有回复消息的文本列表

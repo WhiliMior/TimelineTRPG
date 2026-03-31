@@ -20,6 +20,7 @@ from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
 from ...infrastructure.config.game_config import game_config
+from ...infrastructure.timeline_formatter import timeline_formatter
 
 
 class TimelineModule:
@@ -290,95 +291,19 @@ class TimelineModule:
             return self.reply.render("invalid_number")
     
     def _show_timeline(self, storage_key: str, user_id: str, is_group: bool, character_name: Optional[str]) -> str:
+        """显示时间线（使用统一格式化器）"""
         data = self._get_battle_data(storage_key, is_group)
         active_id = data.get("active_battle_id")
-        
+
         if active_id is None or not data.get("battle_list"):
             return self.reply.render("no_active_timeline")
-        
+
         battle = data["battle_list"].get(active_id)
         if not battle:
             return self.reply.render("no_active_timeline")
-        
-        timeline_data = battle.get("timeline", {})
-        
-        if not timeline_data:
-            return self.reply.render("empty_timeline")
-        
-        current_time_val = battle.get('current_time', 0)
-        max_time_val = battle.get('max_time', 0)
-        
-        lines = [
-            self.reply.render("timeline_header", name=battle.get('name', '未命名')),
-            self.reply.render("timeline_current_max_time", 
-                current=game_config.round_value(current_time_val, "time"), 
-                max=game_config.round_value(max_time_val, "time"))
-        ]
-        
-        # 按时间点排序
-        sorted_times = sorted([float(t) for t in timeline_data.keys()])
-        current_time = battle.get('current_time', 0)
-        
-        for time_point in sorted_times:
-            if time_point < current_time:
-                continue
-            
-            time_str = f"{time_point:.1f}" if time_point.is_integer() else f"{time_point}"
-            actions = timeline_data.get(time_str, [])
-            
-            if actions:
-                dashes = "—" * 5
-                lines.append(f"\n{dashes} {time_str}t {dashes}")
-                
-                # 按角色分组，只保留每个角色的最新行动
-                latest_actions_by_character = {}
-                for action in actions:
-                    user_id_action = action.get('user_id', '')
-                    char_name = action.get('character_name', '未知')
-                    key = (user_id_action, char_name)
-                    
-                    # 保留字典中已有的（更早添加的，即更早创建的行动）
-                    if key not in latest_actions_by_character:
-                        latest_actions_by_character[key] = action
-                
-                for action in latest_actions_by_character.values():
-                    # 检查角色状态
-                    user_id_action = action.get('user_id', '')
-                    char_name = action.get('character_name', '未知')
-                    
-                    # 检查参与者状态
-                    participants = battle.get('participants', {})
-                    user_participants = participants.get(user_id_action, {})
-                    char_info = user_participants.get(char_name, {})
-                    
-                    if char_info.get('status') != '参与中':
-                        continue
-                    
-                    start_time = game_config.round_value(action.get('start_time', 0), "time")
-                    lead_time = game_config.round_value(action.get('lead_time', 0), "time")
-                    impact_value = game_config.round_value(action.get('impact_value', 0), "impact")
-                    
-                    lines.append(f"  [{char_name}]")
-                    lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
-                    lines.append(f"    属性: {action.get('attribute_used', '')} | 影响: {impact_value}")
-                    if action.get('notes'):
-                        lines.append(f"    {action.get('notes')}")
-        
-        # 显示定时事件
-        scheduled_events = battle.get('scheduled_events', [])
-        time_based_events = [
-            e for e in scheduled_events 
-            if e.get('mode') == 'time_based' and e.get('end_time') and current_time < e.get('end_time', 0)
-        ]
-        
-        if time_based_events:
-            lines.append("\n【定时事件】")
-            for event in time_based_events:
-                # 优先显示回调消息，否则显示行动描述
-                event_desc = event.get('callback_message') or event.get('action_description', '')
-                lines.append(f"  {event.get('end_time', 0)}t - {event_desc}")
-        
-        return "\n".join(lines)
+
+        # 使用统一的 timeline 格式化器
+        return timeline_formatter.format_timeline(battle, attribute_label="属性")
     
     def _get_time_point(self, storage_key: str, user_id: str, is_group: bool, time_point: str) -> str:
         data = self._get_battle_data(storage_key, is_group)

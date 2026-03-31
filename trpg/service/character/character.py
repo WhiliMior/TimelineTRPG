@@ -9,6 +9,7 @@ from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.character_picture import character_picture_generator
 
 
 class CharacterModule:
@@ -201,9 +202,14 @@ class CharacterModule:
         cmd = ctx.args[0].lower()
         
         if cmd == 'show':
-            # 显示角色详细信息
-            response = await self._show_character(user_id)
-            ctx.send(response)
+            # 显示角色详细信息（图片模式）
+            image_path = character_picture_generator.generate_character_picture(user_id)
+            if image_path:
+                ctx.send_image(str(image_path), delete_after_send=True)
+            else:
+                # 如果图片生成失败，回退到文本模式
+                response = await self._show_character(user_id)
+                ctx.send(response)
         elif cmd == 'del':
             # 删除角色
             if len(ctx.args) < 2:
