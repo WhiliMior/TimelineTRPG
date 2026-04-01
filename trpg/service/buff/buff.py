@@ -93,7 +93,8 @@ class BuffModule:
     
     支持的指令格式：
     - .buff - 显示buff列表
-    - .buff add <名称> <属性> <类型> <数值> [持续时间] - 添加buff
+    - .buff add <名称> <属性> <类型> <数值> [持续时间] - 添加buff（标准格式）
+    - .buff add <名称> <属性> <数值>d [类型] [持续时间] - 添加buff（基于等级格式，效果% = 数值/(等级*10)）
     - .buff del <序号> - 删除指定buff
     - .buff del all - 删除所有buff
     - .buff show [属性] - 显示buff详情
@@ -132,40 +133,91 @@ class BuffModule:
         command = ctx.args[0].lower()
         
         if command == 'add' and len(ctx.args) >= 5:
-            # .buff add {名称} {属性} {类型} {数值} [持续时间]
+            # 支持两种格式，类型和数值位置可自由调换：
+            # 1. 标准格式: .buff add {名称} {属性} {类型} {数值} [持续时间]
+            #    例: .buff add 力量Buff 力量 直接加算 5 10
+            # 2. 数值d格式: .buff add {名称} {属性} {数值}d [类型] [持续时间]
+            #    例: .buff add 火焰护盾 体质 5d 直接乘算 3t
+            #    例: .buff add 火焰护盾 体质 直接乘算 5d 3t
+            # 效果% = 数值/(等级*10)
+            
             buff_name = ctx.args[1]
             attribute = ctx.args[2]
-            buff_type = ctx.args[3]
-            value_str = ctx.args[4]
             
+            # 智能解析 args[3:] 的参数
+            # 需要识别：数值、类型、持续时间
+            extra_args = ctx.args[3:]
+            
+            buff_type = None
+            value_str = None
             duration = None
-            if len(ctx.args) >= 6:
-                duration_input = ctx.args[5]
-                if duration_input != '0' and duration_input != '0t':
-                    try:
-                        if duration_input.endswith('t'):
-                            duration = duration_input
-                        else:
-                            duration = int(duration_input)
-                    except ValueError:
-                        response = self.reply.render("invalid_duration")
-                        ctx.send(response)
-                        return True
-                else:
-                    duration = None
             
-            try:
-                value = parse_buff_value(value_str, buff_type)
-            except ValueError as e:
-                response = str(e)
-                ctx.send(response)
-                return True
+            for arg in extra_args:
+                # 检查是否是持续时间
+                if arg in ('0', '0t'):
+                    continue
+                if arg.endswith('t'):
+                    duration = arg
+                    continue
+                if arg.isdigit():
+                    duration = int(arg)
+                    continue
+                
+                # 检查是否是类型
+                if arg in VALID_BUFF_TYPES:
+                    buff_type = arg
+                    continue
+                
+                # 检查是否是 "数值d" 格式
+                if arg.lower().endswith('d') and len(arg) > 1 and arg[:-1].isdigit():
+                    value_str = arg
+                    continue
+                
+                # 否则视为数值
+                value_str = arg
             
-            # 验证buff类型
-            if buff_type not in VALID_BUFF_TYPES:
-                response = self.reply.render("invalid_buff_type")
-                ctx.send(response)
-                return True
+            # 判断是否使用 "数值d" 格式
+            use_level_based = value_str and value_str.lower().endswith('d')
+            
+            # 解析数值
+            if use_level_based:
+                # 获取角色等级计算效果百分比
+                character = await self._get_active_character(user_id)
+                if not character:
+                    response = self.reply.render("no_character")
+                    ctx.send(response)
+                    return True
+                
+                level = character.get('data', {}).get('等级', 1)
+                dice_count_str = value_str[:-1]  # 去掉 d
+                dice_count = int(dice_count_str)
+                # 效果% = 数值/(等级*10)
+                effect_percent = dice_count / (level * 10) * 100
+                
+                # 类型默认为直接乘算
+                if not buff_type:
+                    buff_type = "直接乘算"
+                
+                value = effect_percent / 100  # 转换为小数存储
+            else:
+                # 标准格式，需要类型
+                if not buff_type or not value_str:
+                    response = self.reply.render("invalid_buff_type")
+                    ctx.send(response)
+                    return True
+                
+                # 验证buff类型
+                if buff_type not in VALID_BUFF_TYPES:
+                    response = self.reply.render("invalid_buff_type")
+                    ctx.send(response)
+                    return True
+                
+                try:
+                    value = parse_buff_value(value_str, buff_type)
+                except ValueError as e:
+                    response = str(e)
+                    ctx.send(response)
+                    return True
             
             # 验证属性是否合法（使用 AttributeResolver）
             if not AttributeResolver.is_valid(attribute):

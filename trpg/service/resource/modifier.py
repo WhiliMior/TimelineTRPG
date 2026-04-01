@@ -58,7 +58,7 @@ class ResourceModifierModule:
         
         指令格式：
         - .dr - 查看资源修饰列表
-        - .dr add <来源> <范围> <数值> [类型] [持续时间] - 添加资源修饰
+        - .dr add <来源> <范围> <数值> [类型] [持续时间] - 添加资源修饰（类型和持续时间位置可自由调换）
         - .dr del <序号>/all - 移除资源修饰
         - .dr <范围> - 显示指定范围的资源修饰
         """
@@ -77,8 +77,29 @@ class ResourceModifierModule:
             source = ctx.args[1]
             range_input = ctx.args[2]
             value_str = ctx.args[3]
-            type_input = ctx.args[4] if len(ctx.args) > 4 else "通用"
-            duration = ctx.args[5] if len(ctx.args) > 5 else ""
+            
+            # 智能解析类型和持续时间（位置可自由调换）
+            # 支持格式：
+            # .dr add xxx -hp 10 物理 5t
+            # .dr add xxx -hp 10 5t 物理
+            # .dr add xxx -hp 10 物理
+            # .dr add xxx -hp 10 5t
+            type_input = "通用"
+            duration = ""
+            
+            extra_args = ctx.args[4:] if len(ctx.args) > 4 else []
+            
+            for arg in extra_args:
+                # 检查是否是持续时间（数字或数字+t）
+                if arg.isdigit():
+                    duration = arg
+                    continue
+                if arg.lower().endswith('t') and len(arg) > 1 and arg[:-1].isdigit():
+                    duration = arg
+                    continue
+                
+                # 否则视为类型
+                type_input = arg
             
             conversation_id = ctx.group_id or ctx.session_id or user_id
             result = await self._add_modifier(user_id, conversation_id, source, range_input, value_str, type_input, duration)
