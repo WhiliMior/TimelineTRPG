@@ -18,8 +18,8 @@ class ResourceRecordModule:
     资源记录模块
     
     支持的指令格式：
-    - .rc {hp/mp} {变化值} (持续时间) (f) - 修改资源
-    - .rc 护盾/s {变化值} (覆盖范围) (持续时间) (f) - 修改护盾资源
+    - .rc {hp/mp} {变化值} (变化类型/f) - 修改资源
+    - .rc 护盾/s {变化值} (覆盖范围) (持续时间) - 添加护盾
     - .rc reset - 重置资源到最大值
     - .rc show - 显示当前资源状态
     """
@@ -56,12 +56,12 @@ class ResourceRecordModule:
     def help_entry(self) -> HelpEntry:
         return HelpEntry(
             module="rc",
-            usage="[hp/mp|护盾|reset|show] [变化值] [持续时间] [f]",
+            usage="[hp/mp|护盾|reset|show] [变化值] [变化类型|f]",
             summary="资源记录",
             detail=(
                 "- 显示当前资源状态\n"
                 "{hp/mp} {变化值} (持续时间) (f) - 修改资源\n"
-                "护盾/s {变化值} (覆盖范围) (持续时间) (f) - 添加护盾\n"
+                "护盾/s {变化值} (覆盖范围) (持续时间) - 添加护盾\n"
                 "reset - 重置资源到最大值并清除护盾\n"
                 "show - 显示当前资源状态\n"
                 "\n"
@@ -75,7 +75,7 @@ class ResourceRecordModule:
         
         指令格式：
         - .rc {hp/mp} {变化值} (持续时间) (f) - 修改资源
-        - .rc 护盾/s {变化值} (覆盖范围) (持续时间) (f) - 添加护盾
+        - .rc 护盾/s {变化值} (覆盖范围) (持续时间) - 添加护盾
         - .rc reset - 重置资源到最大值
         - .rc show - 显示当前资源状态
         """
@@ -355,7 +355,7 @@ class ResourceRecordModule:
         # 变化类型直接使用原始字符串比较（用户输入什么就匹配什么）
         normalized_change_type = change_type.strip() if change_type else None
         
-        if normalized_change_type and normalized_change_type.lower() in ['bp', 'bypass']:
+        if normalized_change_type and normalized_change_type.lower() in ['f', 'F', 'bypass']:
             # bypass 完全绕过所有修饰
             return value_change, ""
         
@@ -560,8 +560,8 @@ class ResourceRecordModule:
         if value_change is None:
             return self.reply.render("invalid_value")
         
-        # 解析变化类型参数（第三个参数，可能是物理、魔法、bp/bypass等）
-        # 格式: .rc hp +10 物理  或  .rc hp -15 bp
+        # 解析变化类型参数（第二个参数，可能是物理、魔法、f等）
+        # 格式: .rc hp +10 物理  或  .rc hp -15 f
         change_type = None
         if len(args) >= 2:
             potential_type = args[1].lower()
@@ -650,22 +650,50 @@ class ResourceRecordModule:
         if shield_value is None:
             return self.reply.render("invalid_value")
         
-        # 解析覆盖类型（可选，默认为all）
+        # 智能解析覆盖类型和持续时间
+        # 格式: .rc s <值> [覆盖类型|持续时间] [持续时间|覆盖类型] [覆盖类型]
+        # 示例: rc s 10       -> 值=10, 覆盖=all, 持续=0
+        #       rc s 10 all   -> 值=10, 覆盖=all, 持续=0
+        #       rc s 10 5t    -> 值=10, 覆盖=all, 持续=5t
+        #       rc s 10 5     -> 值=10, 覆盖=all, 持续=5t
+        #       rc s 10 all 5t-> 值=10, 覆盖=all, 持续=5t
+        #       rc s 10 5t 物理-> 值=10, 覆盖=物理, 持续=5t
+        #       rc s 10 物理 5t-> 值=10, 覆盖=物理, 持续=5t
         coverage_type = 'all'
-        if len(args) > 1:
-            cov = args[1].lower()
-            if cov in self.COVERAGE_TYPE_MAPPING:
-                coverage_type = self.COVERAGE_TYPE_MAPPING[cov]
-            else:
-                return self.reply.render("invalid_value")
-        
-        # 解析持续时间（可选）
         duration = "0t"
-        if len(args) > 2:
-            duration = args[2]
         
-        # 检查是否有f标记
-        allow_overflow = 'f' in [arg.lower() for arg in args]
+        def is_duration(s: str) -> bool:
+            """检查字符串是否为持续时间格式"""
+            if not s:
+                return False
+            # 纯数字 或 以t结尾的数字 (如 5t)
+            s_lower = s.lower()
+            if s_lower.isdigit():
+                return True
+            if s_lower.endswith('t') and s_lower[:-1].isdigit():
+                return True
+            return False
+        
+        def is_coverage_type(s: str) -> bool:
+            """检查字符串是否为覆盖类型"""
+            return s.lower() in self.COVERAGE_TYPE_MAPPING
+        
+        # 分析 args[1] 的类型
+        if len(args) > 1:
+            arg1 = args[1]
+            if is_coverage_type(arg1):
+                # args[1] 是覆盖类型
+                coverage_type = self.COVERAGE_TYPE_MAPPING[arg1.lower()]
+                if len(args) > 2 and is_duration(args[2]):
+                    duration = args[2]
+            elif is_duration(arg1):
+                # args[1] 是持续时间
+                duration = arg1
+                if len(args) > 2 and is_coverage_type(args[2]):
+                    coverage_type = self.COVERAGE_TYPE_MAPPING[args[2].lower()]
+            else:
+                # 未知参数，视为无效
+                return self.reply.render("invalid_value")
         
         # 创建护盾
         resources = await self._get_resource_data(user_id)
