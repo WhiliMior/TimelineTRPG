@@ -12,8 +12,8 @@ Help 注册表模块，提供统一的帮助信息管理和查询。
   - 如果更改指令前缀，help 显示的前缀也会动态更改
   - 支持从 Router 动态获取可用命令列表
 """
-from dataclasses import dataclass, field
-from typing import List, Optional
+
+from dataclasses import dataclass
 
 
 @dataclass
@@ -27,6 +27,7 @@ class HelpEntry:
         summary:    一句话简介，如 "回显消息"
         detail:     详细帮助文本（支持换行），可包含用法示例
     """
+
     module: str
     usage: str
     summary: str
@@ -73,12 +74,12 @@ class HelpRegistry:
         """设置 Router 实例，用于动态获取指令前缀。"""
         self._router = router
 
-    def get_available_commands(self) -> List[str]:
+    def get_available_commands(self) -> list[str]:
         """
         获取当前可用的指令列表。
         优先从 Router 获取，如果没有设置 Router 则从注册的帮助条目获取。
         """
-        if self._router and hasattr(self._router, 'list_commands'):
+        if self._router and hasattr(self._router, "list_commands"):
             # 从 Router 获取实际可用的命令列表
             return self._router.list_commands()
         else:
@@ -103,14 +104,14 @@ class HelpRegistry:
         lines: list[str] = []
         if self.header:
             lines.append(self.header)
-        
+
         # 首先显示所有已注册且有帮助的指令
         for command in sorted(available_commands):
             entry = self._entries.get(command)
             if entry:
                 # 动态添加前缀
                 lines.append(f"  .{command} {entry.usage:<20} - {entry.summary}")
-        
+
         if self.footer:
             lines.append(self.footer)
         return "\n".join(lines)
@@ -125,7 +126,7 @@ class HelpRegistry:
         entry = self._entries.get(module)
         if entry is None:
             return None
-        
+
         # 构建详细帮助，动态添加前缀
         if entry.detail:
             # 如果有详细帮助，直接使用，但确保格式正确

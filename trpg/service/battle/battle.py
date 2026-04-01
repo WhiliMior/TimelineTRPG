@@ -10,18 +10,19 @@
 - 武器战斗（需武器系统支持）
 """
 
+import math
 import time
-import re
-from typing import Dict, List, Optional, Any, Union
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
-from ...infrastructure.help import HelpEntry
-from ...infrastructure.storage import StorageBackend
-from ...infrastructure.config.game_config import game_config
 from ...infrastructure.attribute_resolver import AttributeResolver
 from ...infrastructure.character_reader import CharacterReader
+from ...infrastructure.config.game_config import game_config
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend
 from ...infrastructure.timeline_formatter import timeline_formatter
+
+from .core import init_timeline_core, timeline_core
 
 
 class BattleModule:
@@ -42,6 +43,8 @@ class BattleModule:
     def __init__(self):
         self.reply = ReplyManager("battle")
         self.system_reply = ReplyManager("system")
+        # 初始化 timeline_core
+        init_timeline_core(self)
 
     @property
     def help_entry(self) -> HelpEntry:
@@ -154,7 +157,7 @@ class BattleModule:
 
         return True
 
-    def _get_battle(self, storage_key: str, is_group: bool = True) -> Dict:
+    def _get_battle(self, storage_key: str, is_group: bool = True) -> dict:
         """
         获取当前活跃的战斗对象
         数据结构：{"active_battle_id": xxx, "player": {}, "battle_list": {"xxx": {...}}}
@@ -186,7 +189,7 @@ class BattleModule:
                 "scheduled_events": [],
             }
 
-    def _save_battle(self, storage_key: str, battle: Dict, is_group: bool = True):
+    def _save_battle(self, storage_key: str, battle: dict, is_group: bool = True):
         """
         保存战斗数据
 
@@ -240,14 +243,14 @@ class BattleModule:
 
         return character_module
 
-    async def _get_active_character(self, user_id: str) -> Optional[Dict]:
+    async def _get_active_character(self, user_id: str) -> dict | None:
         """获取用户当前激活的角色"""
         char_module = self._get_character_module()
         return await char_module.get_active_character(user_id)
 
     async def _get_character_attributes(
         self, user_id: str, character_name: str
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """获取角色的最终属性值（包含Buff修正）"""
         active_char = await self._get_active_character(user_id)
         if not active_char:
@@ -271,9 +274,7 @@ class BattleModule:
 
         return attributes
 
-    async def _get_final_attribute(
-        self, user_id: str, attribute: str
-    ) -> Optional[float]:
+    async def _get_final_attribute(self, user_id: str, attribute: str) -> float | None:
         """获取角色的最终属性值（包含Buff修正）"""
         # 使用 CharacterReader 获取最终属性（包含Buff修正）
         return CharacterReader.get_attribute_value(
@@ -348,11 +349,11 @@ class BattleModule:
         """根据精度四舍五入（保留本地方法，内部使用统一配置）"""
         return round(value, precision)
 
-    def _format_time(self, value: float) -> Union[int, float]:
+    def _format_time(self, value: float) -> int | float:
         """格式化时间值"""
         return game_config.round_value(value, "time")
 
-    def _format_impact(self, value: float) -> Union[int, float]:
+    def _format_impact(self, value: float) -> int | float:
         """格式化影响值"""
         return game_config.round_value(value, "impact")
 
@@ -378,7 +379,6 @@ class BattleModule:
                 return self.reply.render("battle_already_exists")
 
         # 创建新战斗 - 使用时间戳作为ID
-        import time
 
         new_battle_id = str(int(time.time()))
 
@@ -434,7 +434,6 @@ class BattleModule:
         if char_name not in battle["participants"][user_id]:
             battle["participants"][user_id][char_name] = {
                 "status": "参与中",
-                "last_action_time": 0,
             }
 
         self._save_battle(storage_key, battle, is_group)
@@ -558,7 +557,7 @@ class BattleModule:
         user_id: str,
         is_group: bool,
         attribute: str,
-        args: List[str],
+        args: list[str],
     ) -> str:
         """
         添加战斗行动
@@ -594,10 +593,12 @@ class BattleModule:
         if character_name not in battle["participants"][user_id]:
             battle["participants"][user_id][character_name] = {
                 "status": "参与中",
-                "last_action_time": 0,
             }
 
-        participant = battle["participants"][user_id][character_name]
+        # 获取角色最新行动的结束时间（用于计算新行动起始时间）
+        latest_end_time = self._timeline_core.get_latest_action_end_time(
+            battle, user_id, character_name
+        )
 
         # 获取属性值
         attribute_value = await self._get_final_attribute(user_id, attribute)
@@ -626,8 +627,8 @@ class BattleModule:
         if error:
             return self.reply.render("invalid_input")
 
-        # 计算行动时间点
-        start_time = participant.get("last_action_time", 0)
+        # 计算行动时间点（使用角色最新行动的结束时间作为新行动的起始时间）
+        start_time = latest_end_time
         new_time_point = start_time + time_val
         new_time_point = self._format_time(new_time_point)
 
@@ -656,15 +657,7 @@ class BattleModule:
             battle["timeline"][time_str] = []
         battle["timeline"][time_str].append(action)
 
-        # 更新参与者最后行动时间
-        participant["last_action_time"] = new_time_point
-
-        # 更新最大时间
-        current_max = battle.get("max_time", 0)
-        battle["max_time"] = max(current_max, new_time_point)
-
-        # 重新计算当前时间
-        self._recalculate_current_time(battle)
+        # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
@@ -735,7 +728,7 @@ class BattleModule:
         user_id: str,
         insert_time: str,
         attribute: str,
-        args: List[str],
+        args: list[str],
     ) -> str:
         """在指定时间点插入行动"""
         battle = self._get_battle(storage_key)
@@ -846,21 +839,7 @@ class BattleModule:
                 battle["timeline"][time_str] = []
             battle["timeline"][time_str].append(action)
 
-            # 更新参与者最后行动时间
-            if (
-                user_id in battle["participants"]
-                and character_name in battle["participants"][user_id]
-            ):
-                battle["participants"][user_id][character_name]["last_action_time"] = (
-                    new_time_point
-                )
-
-            # 更新最大时间
-            current_max = battle.get("max_time", 0)
-            battle["max_time"] = max(current_max, new_time_point)
-
-        # 重新计算当前时间
-        self._recalculate_current_time(battle)
+        # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
@@ -897,8 +876,8 @@ class BattleModule:
 
         character_name = str(active_char.get("name", "未知角色"))
 
-        # 找到该用户该角色的最后一个行动
-        last_time_point = None
+        # 找到该用户该角色的最后一个行动（比较结束时间 time_str）
+        last_end_time = None
         last_action_index = -1
         last_action_time_str = None
 
@@ -909,9 +888,10 @@ class BattleModule:
                     action["user_id"] == user_id
                     and str(action["character_name"]) == character_name
                 ):
-                    current_time = float(time_str) - action["lead_time"]
-                    if last_time_point is None or current_time > last_time_point:
-                        last_time_point = current_time
+                    # 直接比较 time_str（结束时间），找到最后添加的行动
+                    action_end_time = float(time_str)
+                    if last_end_time is None or action_end_time > last_end_time:
+                        last_end_time = action_end_time
                         last_action_index = i
                         last_action_time_str = time_str
 
@@ -924,33 +904,6 @@ class BattleModule:
             if not battle["timeline"][last_action_time_str]:
                 del battle["timeline"][last_action_time_str]
 
-        # 重新计算参与者的最后行动时间
-        latest_action_time = 0
-        timeline = battle.get("timeline", {})
-        for time_str, actions in timeline.items():
-            for action in actions:
-                if (
-                    action["user_id"] == user_id
-                    and str(action["character_name"]) == character_name
-                ):
-                    action_time = float(time_str) - action["lead_time"]
-                    latest_action_time = max(latest_action_time, action_time)
-
-        participants = battle.get("participants", {})
-        if user_id in participants and character_name in participants[user_id]:
-            battle["participants"][user_id][character_name]["last_action_time"] = (
-                latest_action_time
-            )
-
-        # 重新计算max_time和current_time
-        max_time = 0
-        for time_str in timeline.keys():
-            time_val = float(time_str)
-            max_time = max(max_time, time_val)
-
-        battle["max_time"] = self._format_time(max_time)
-        self._recalculate_current_time(battle)
-
         # 恢复被撤销的计数模式事件（恢复1次）
         self._restore_count_based_events(storage_key, user_id, character_name, is_group)
 
@@ -960,11 +913,15 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
+        # 格式化输出当前时间轴状态
+        timeline_result = self._format_timeline_display(battle)
+
         # 返回结果
         result = self.reply.render("action_undone", name=character_name)
         if executed:
             event_msgs = "\n【到期事件】\n" + "\n".join(executed)
             result += event_msgs
+        result += "\n" + timeline_result
         return result
 
     def _restore_count_based_events(
@@ -999,22 +956,9 @@ class BattleModule:
         # 保存数据
         self._save_battle(storage_key, battle, is_group)
 
-    def _recalculate_current_time(self, battle: Dict):
-        """重新计算当前时间（所有角色最后行动时间的最小值）"""
-        last_times = []
-        participants = battle.get("participants", {})
-        for user_participants in participants.values():
-            for participant_info in user_participants.values():
-                if participant_info.get("status") == "参与中":
-                    last_times.append(participant_info.get("last_action_time", 0))
-
-        if last_times:
-            battle["current_time"] = min(last_times)
-            battle["current_time"] = self._format_time(battle["current_time"])
-        else:
-            battle["current_time"] = 0
-
-    def _format_timeline_display(self, battle: Dict, attribute_label: str = "属性", extra_info: Dict = None) -> str:
+    def _format_timeline_display(
+        self, battle: dict, attribute_label: str = "属性", extra_info: dict = None
+    ) -> str:
         """格式化时间轴显示（使用统一格式化器）
 
         Args:
@@ -1022,17 +966,21 @@ class BattleModule:
             attribute_label: 属性列标签（"属性"或"武器"）
             extra_info: 额外信息（如弹药）
         """
+        # 实时计算 current_time 和 max_time（通过 self._timeline_core）
+        current_time = self._timeline_core.get_current_time(battle)
+        max_time = self._timeline_core.get_max_time(battle)
+        # 设置到 battle 中供 formatter 使用
+        battle["current_time"] = current_time
+        battle["max_time"] = max_time
         return timeline_formatter.format_timeline(
             battle, attribute_label=attribute_label, extra_info=extra_info
         )
 
     async def _weapon_battle(
-        self, storage_key: str, user_id: str, is_group: bool, args: List[str]
+        self, storage_key: str, user_id: str, is_group: bool, args: list[str]
     ) -> str:
         """武器战斗指令（需要武器系统）"""
-        import math
         from ..weapon.weapon import weapon_module
-        from ...infrastructure.character_reader import CharacterReader
 
         battle = self._get_battle(storage_key, is_group)
 
@@ -1109,9 +1057,9 @@ class BattleModule:
     async def _handle_amplifier_weapon(
         self,
         user_id: str,
-        battle: Dict,
+        battle: dict,
         is_group: bool,
-        weapon: Dict,
+        weapon: dict,
         character_name: str,
         weapon_name: str,
         damage: float,
@@ -1172,9 +1120,9 @@ class BattleModule:
     async def _handle_artillery_weapon(
         self,
         user_id: str,
-        battle: Dict,
+        battle: dict,
         is_group: bool,
-        weapon: Dict,
+        weapon: dict,
         character_name: str,
         weapon_name: str,
         damage: float,
@@ -1183,71 +1131,106 @@ class BattleModule:
         notes: str,
         storage_key: str,
     ) -> str:
-        """处理火力武器"""
-        import math
-        from ..weapon.weapon import weapon_module
-        from ...infrastructure.character_reader import CharacterReader
+        """
+        处理火力武器
 
+        火力武器设计：
+        - 伤害 = 单发子弹伤害 x 发射子弹数
+        - 不需要角色的任何属性增幅
+        - weapon.damage = 单发子弹的基础伤害
+        - weapon.cast = 每发子弹的前摇时间
+        - weapon.load = 弹匣容量
+        """
         # 获取当前弹药数
         current_load = weapon.get("current_load", 0)
         max_load = weapon.get("load", 0)
 
-        # 获取角色经过buff后的火力属性值
-        final_attr_value = CharacterReader.get_attribute_value(
-            user_id, "火力", include_buffs=True
-        )
-        if final_attr_value is None or final_attr_value == 0:
-            return self.reply.render("fire_attribute_not_found_or_zero")
+        # 单发子弹伤害
+        per_bullet_damage = damage
 
-        # 计算增幅后的属性值 (damage为百分比加成)
-        amplified_attr = final_attr_value * (1 + damage / 100)
+        if per_bullet_damage <= 0:
+            return self.reply.render("weapon_damage_zero")
+
+        if cast <= 0:
+            return self.reply.render("weapon_cast_zero")
+
+        # 如果没有弹药，直接返回提示
+        if current_load == 0:
+            return self.reply.render(
+                "weapon_ammo_insufficient",
+                current_load=0,
+                max_load=max_load,
+                available_time=0,
+                max_impact=0,
+            )
 
         # 解析输入
         is_time_input = value_str.endswith("t")
 
-        # 使用统一公式: impact = (attr / 10) * (time / 2) = attr * time / 20
         if is_time_input:
+            # 时间模式：让武器开火直到总时间接近输入值
             try:
                 time_input = float(value_str.rstrip("t"))
             except ValueError:
                 return self.reply.render("invalid_time")
 
-            if cast <= 0:
-                return self.reply.render("weapon_cast_zero")
-
-            # 计算最多可以打的子弹数（留一发子弹的时间）
+            # 计算最多可以发射的子弹数
             max_bullets = int(time_input // cast)
 
             if max_bullets == 0:
-                return self.reply.render("time_insufficient_for_bullets", time=time_input, cast=cast)
+                return self.reply.render(
+                    "time_insufficient_for_bullets", time=time_input, cast=cast
+                )
 
-            actual_bullets = min(max_bullets, current_load)
+            # 检查弹药是否足够
+            if max_bullets > current_load:
+                # 弹药不足，返回提示信息
+                available_time = current_load * cast
+                max_impact = per_bullet_damage * current_load
+                return self.reply.render(
+                    "weapon_ammo_insufficient",
+                    current_load=current_load,
+                    max_load=max_load,
+                    available_time=game_config.round_value(available_time, "time"),
+                    max_impact=int(max_impact),
+                )
+
+            actual_bullets = max_bullets
             remaining_bullets = current_load - actual_bullets
             time_val = actual_bullets * cast
-            impact_val = self.calculate_impact_from_time(amplified_attr, time_val)
+            # 火力武器伤害 = 单发伤害 x 子弹数
+            impact_val = per_bullet_damage * actual_bullets
 
         else:
+            # 影响值模式：输入目标影响值，计算需要的子弹数和时间
             try:
                 impact_input = float(value_str)
             except ValueError:
                 return self.reply.render("invalid_impact")
 
-            if amplified_attr <= 0:
-                return self.reply.render("amplified_attr_zero")
+            # 计算需要的子弹数（向上取整）
+            needed_bullets = math.ceil(impact_input / per_bullet_damage)
 
-            time_val = self.calculate_time_from_impact(amplified_attr, impact_input)
+            # 检查弹药是否足够
+            if needed_bullets > current_load:
+                # 弹药不足，返回提示信息
+                available_time = current_load * cast
+                max_impact = per_bullet_damage * current_load
+                return self.reply.render(
+                    "weapon_ammo_insufficient",
+                    current_load=current_load,
+                    max_load=max_load,
+                    available_time=game_config.round_value(available_time, "time"),
+                    max_impact=int(max_impact),
+                )
 
-            # 根据时间计算可发射的子弹数
-            if cast > 0:
-                actual_bullets = min(int(time_val // cast), current_load)
-                remaining_bullets = current_load - actual_bullets
-                # 重新计算实际时间和impact
-                time_val = actual_bullets * cast
-                impact_val = self.calculate_impact_from_time(amplified_attr, time_val)
-            else:
-                actual_bullets = current_load
-                remaining_bullets = 0
-                impact_val = impact_input
+            actual_bullets = needed_bullets
+            remaining_bullets = current_load - actual_bullets
+
+            # 实际发射的子弹数决定实际伤害
+            actual_impact = per_bullet_damage * actual_bullets
+            time_val = actual_bullets * cast
+            impact_val = actual_impact
 
         # 格式化
         time_val = game_config.round_value(time_val, "time")
@@ -1259,7 +1242,7 @@ class BattleModule:
         # 传递弹药信息
         extra_info = {"ammo": {"current": remaining_bullets, "max": max_load}}
 
-        # 添加战斗行动
+        # 添加战斗行动（使用"火力"作为属性标识）
         return await self._add_action_with_weapon(
             storage_key,
             user_id,
@@ -1273,7 +1256,7 @@ class BattleModule:
             extra_info=extra_info,
         )
 
-    async def _weapon_reload(self, user_id: str, battle: Dict, is_group: bool) -> str:
+    async def _weapon_reload(self, user_id: str, battle: dict, is_group: bool) -> str:
         """火力武器装填"""
         from ..weapon.weapon import weapon_module
 
@@ -1319,7 +1302,7 @@ class BattleModule:
 
         return result + f"\n[装填完成: {max_load}/{max_load}]"
 
-    async def _update_weapon_ammo(self, user_id: str, weapon: Dict, new_ammo: int):
+    async def _update_weapon_ammo(self, user_id: str, weapon: dict, new_ammo: int):
         """更新武器弹药数"""
         from ..weapon.weapon import weapon_module
 
@@ -1343,7 +1326,7 @@ class BattleModule:
         impact_val: float,
         weapon_name: str,
         notes: str,
-        extra_info: Dict = None,
+        extra_info: dict = None,
     ) -> str:
         """添加武器战斗行动
 
@@ -1371,13 +1354,15 @@ class BattleModule:
         if character_name not in battle["participants"][user_id]:
             battle["participants"][user_id][character_name] = {
                 "status": "参与中",
-                "last_action_time": 0,
             }
 
-        participant = battle["participants"][user_id][character_name]
+        # 获取角色最新行动的结束时间（用于计算新行动起始时间）
+        latest_end_time = self._timeline_core.get_latest_action_end_time(
+            battle, user_id, character_name
+        )
 
-        # 计算时间点
-        start_time = participant.get("last_action_time", 0)
+        # 计算时间点（使用角色最新行动的结束时间作为新行动的起始时间）
+        start_time = latest_end_time
         new_time_point = start_time + time_val
         new_time_point = self._format_time(new_time_point)
 
@@ -1407,15 +1392,7 @@ class BattleModule:
             battle["timeline"][time_str] = []
         battle["timeline"][time_str].append(action)
 
-        # 更新参与者最后行动时间
-        participant["last_action_time"] = new_time_point
-
-        # 更新最大时间
-        current_max = battle.get("max_time", 0)
-        battle["max_time"] = max(current_max, new_time_point)
-
-        # 重新计算当前时间
-        self._recalculate_current_time(battle)
+        # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
@@ -1448,7 +1425,7 @@ class BattleModule:
         action_description: str,
         duration_or_count: float,
         callback_path: str,
-        callback_args: Dict,
+        callback_args: dict,
         callback_message: str,
         mode: str = "time_based",
         is_group: bool = True,
@@ -1476,7 +1453,7 @@ class BattleModule:
 
     def execute_scheduled_events(
         self, conversation_id: str, user_id: str = None, is_group: bool = True
-    ) -> List[str]:
+    ) -> list[str]:
         """
         执行到期的定时事件
 

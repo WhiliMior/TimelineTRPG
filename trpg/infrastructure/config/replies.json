@@ -169,9 +169,10 @@
     "invalid_time": "无效的时间值",
     "invalid_impact": "无效的影响值",
     "amplified_attr_zero": "增幅后属性值为0，无法计算",
-    "fire_attribute_not_found_or_zero": "未找到火力属性或属性值为0",
+    "weapon_damage_zero": "武器单发伤害为0，无法使用",
     "weapon_cast_zero": "武器前摇为0，无法使用时间模式",
     "time_insufficient_for_bullets": "时间{time}t不足以发射任何子弹（前摇{cast}t）",
+    "weapon_ammo_insufficient": "弹药不足！\n剩余弹药: {current_load}/{max_load} 发\n可开火时间: {available_time}t\n最大伤害: {max_impact}\n请先装填武器（.bt wp re）",
     "weapon_not_artillery": "武器[{name}]不是火力武器，无法装填",
     "weapon_no_reload_time": "武器[{name}]没有装填时间"
   },

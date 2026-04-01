@@ -3,7 +3,7 @@
 
 __all__ = [
     "battle",
-    "character", 
+    "character",
     "dice",
     "examination",
     "buff",

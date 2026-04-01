@@ -12,10 +12,9 @@
 """
 
 import json
-import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 
 class StorageType(str, Enum):
@@ -47,7 +46,7 @@ class StorageBackend:
     """
 
     # 插件数据目录（类级别缓存）
-    _plugin_data_dir: Optional[Path] = None
+    _plugin_data_dir: Path | None = None
 
     @classmethod
     def _get_plugin_data_dir(cls) -> Path:
@@ -161,10 +160,10 @@ class StorageBackend:
             return default
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
                 return data
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"[StorageBackend] 加载文件失败 {file_path}: {e}")
             return default
 
@@ -190,7 +189,7 @@ class StorageBackend:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except (TypeError, IOError) as e:
+        except (OSError, TypeError) as e:
             print(f"[StorageBackend] 保存文件失败 {file_path}: {e}")
             return False
 
@@ -217,9 +216,9 @@ class StorageBackend:
             return default
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"[StorageBackend] 加载全局文件失败 {file_path}: {e}")
             return default
 
@@ -242,14 +241,14 @@ class StorageBackend:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except (TypeError, IOError) as e:
+        except (OSError, TypeError) as e:
             print(f"[StorageBackend] 保存全局文件失败 {file_path}: {e}")
             return False
 
     # ==================== 角色数据快捷方法 ====================
 
     @classmethod
-    def load_characters(cls, user_id: str) -> List[Dict]:
+    def load_characters(cls, user_id: str) -> list[dict]:
         """
         加载用户角色列表
 
@@ -262,7 +261,7 @@ class StorageBackend:
         return cls.load(StorageType.USER, user_id, default=[])
 
     @classmethod
-    def save_characters(cls, user_id: str, characters: List[Dict]) -> bool:
+    def save_characters(cls, user_id: str, characters: list[dict]) -> bool:
         """
         保存用户角色列表
 
@@ -276,7 +275,7 @@ class StorageBackend:
         return cls.save(StorageType.USER, user_id, characters)
 
     @classmethod
-    def get_character(cls, user_id: str, character_name: str) -> Optional[Dict]:
+    def get_character(cls, user_id: str, character_name: str) -> dict | None:
         """
         获取指定角色
 
@@ -295,7 +294,7 @@ class StorageBackend:
 
     @classmethod
     def update_character(
-        cls, user_id: str, character_name: str, character_data: Dict
+        cls, user_id: str, character_name: str, character_data: dict
     ) -> bool:
         """
         更新角色数据
@@ -342,7 +341,7 @@ class StorageBackend:
     # ==================== 战斗数据快捷方法 ====================
 
     @classmethod
-    def load_battle(cls, conversation_id: str) -> Dict:
+    def load_battle(cls, conversation_id: str) -> dict:
         """
         加载战斗数据
 
@@ -356,7 +355,7 @@ class StorageBackend:
         return cls.load(StorageType.BATTLE, conversation_id, default=default)
 
     @classmethod
-    def save_battle(cls, conversation_id: str, battle_data: Dict) -> bool:
+    def save_battle(cls, conversation_id: str, battle_data: dict) -> bool:
         """
         保存战斗数据
 
@@ -374,7 +373,7 @@ class StorageBackend:
     @classmethod
     def load_negotiation(
         cls, conversation_id: str = None, session_type: str = "private"
-    ) -> Dict:
+    ) -> dict:
         """
         加载谈判数据
 
@@ -401,7 +400,7 @@ class StorageBackend:
 
     @classmethod
     def save_negotiation(
-        cls, conversation_id: str, negotiation_data: Dict, session_type: str = "private"
+        cls, conversation_id: str, negotiation_data: dict, session_type: str = "private"
     ) -> bool:
         """
         保存谈判数据
@@ -432,7 +431,7 @@ class StorageBackend:
     @classmethod
     def load_target(
         cls, conversation_id: str = None, session_type: str = "private"
-    ) -> Dict:
+    ) -> dict:
         """
         加载目标数据
 
@@ -457,7 +456,7 @@ class StorageBackend:
 
     @classmethod
     def save_target(
-        cls, conversation_id: str, target_data: Dict, session_type: str = "private"
+        cls, conversation_id: str, target_data: dict, session_type: str = "private"
     ) -> bool:
         """
         保存目标数据
@@ -484,7 +483,7 @@ class StorageBackend:
     # ==================== 武器数据快捷方法 ====================
 
     @classmethod
-    def load_weapons(cls, user_id: str) -> List[Dict]:
+    def load_weapons(cls, user_id: str) -> list[dict]:
         """
         加载用户武器列表
 
@@ -497,7 +496,7 @@ class StorageBackend:
         return cls.load(StorageType.WEAPON, user_id, default=[])
 
     @classmethod
-    def save_weapons(cls, user_id: str, weapons: List[Dict]) -> bool:
+    def save_weapons(cls, user_id: str, weapons: list[dict]) -> bool:
         """
         保存用户武器列表
 
@@ -513,7 +512,7 @@ class StorageBackend:
     # ==================== 资源数据快捷方法 ====================
 
     @classmethod
-    def load_resources(cls, user_id: str) -> Dict:
+    def load_resources(cls, user_id: str) -> dict:
         """
         加载用户资源数据
 
@@ -526,7 +525,7 @@ class StorageBackend:
         return cls.load(StorageType.RESOURCE, user_id, default={})
 
     @classmethod
-    def save_resources(cls, user_id: str, resources: Dict) -> bool:
+    def save_resources(cls, user_id: str, resources: dict) -> bool:
         """
         保存用户资源数据
 
@@ -585,7 +584,7 @@ class StorageBackend:
         return cls._get_battle_timeline_dir(session_type, conversation_id) / "data.json"
 
     @classmethod
-    def load_battle_timeline(cls, conversation_id: str, is_group: bool = True) -> Dict:
+    def load_battle_timeline(cls, conversation_id: str, is_group: bool = True) -> dict:
         """
         加载战斗时间轴数据
 
@@ -605,15 +604,15 @@ class StorageBackend:
             return default
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"[StorageBackend] 加载战斗时间轴失败 {file_path}: {e}")
             return default
 
     @classmethod
     def save_battle_timeline(
-        cls, conversation_id: str, data: Dict, is_group: bool = True
+        cls, conversation_id: str, data: dict, is_group: bool = True
     ) -> bool:
         """
         保存战斗时间轴数据
@@ -633,7 +632,7 @@ class StorageBackend:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except (TypeError, IOError) as e:
+        except (OSError, TypeError) as e:
             print(f"[StorageBackend] 保存战斗时间轴失败 {file_path}: {e}")
             return False
 
@@ -668,7 +667,7 @@ class StorageBackend:
     @classmethod
     def load_inventory_weights(
         cls, conversation_id: str, is_group: bool = True
-    ) -> Dict:
+    ) -> dict:
         """
         加载物品重量数据
 
@@ -685,15 +684,15 @@ class StorageBackend:
             return {}
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"[StorageBackend] 加载物品重量失败 {file_path}: {e}")
             return {}
 
     @classmethod
     def save_inventory_weights(
-        cls, conversation_id: str, weights: Dict, is_group: bool = True
+        cls, conversation_id: str, weights: dict, is_group: bool = True
     ) -> bool:
         """
         保存物品重量数据
@@ -712,6 +711,6 @@ class StorageBackend:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(weights, f, ensure_ascii=False, indent=2)
             return True
-        except (TypeError, IOError) as e:
+        except (OSError, TypeError) as e:
             print(f"[StorageBackend] 保存物品重量失败 {file_path}: {e}")
             return False

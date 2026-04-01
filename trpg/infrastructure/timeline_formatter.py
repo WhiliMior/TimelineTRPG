@@ -4,7 +4,6 @@
 提供统一的时间轴显示功能，供 battle.py 和 timeline.py 使用。
 """
 
-from typing import Dict, List, Optional, Any
 from .config.game_config import game_config
 
 
@@ -17,9 +16,9 @@ class TimelineFormatter:
 
     @staticmethod
     def format_timeline(
-        battle: Dict,
+        battle: dict,
         attribute_label: str = "属性",
-        extra_info: Optional[Dict] = None,
+        extra_info: dict | None = None,
     ) -> str:
         """
         格式化时间轴显示
@@ -47,6 +46,10 @@ class TimelineFormatter:
             TimelineFormatter._get_time_info(current_time, max_time),
         ]
 
+        # 收集每个角色的最新行动（只显示未完成的行动）
+        # key: (user_id, character_name), value: (end_time, action)
+        latest_action_by_character: dict[tuple[str, str], tuple[float, dict]] = {}
+
         for time_point in sorted_times:
             if time_point < current_time:
                 continue
@@ -55,29 +58,42 @@ class TimelineFormatter:
             actions = timeline.get(time_str, [])
 
             if actions:
-                # 过滤：只显示每个角色在该时间点的最新行动
-                latest_actions_by_character = {}
                 for action in actions:
-                    key = (action["user_id"], action["character_name"])
-                    latest_actions_by_character[key] = action
+                    char_name = action.get("character_name", "")
+                    user_id = action.get("user_id", "")
+                    key = (user_id, char_name)
+
+                    # 只保留每个角色最新的行动（时间点最大的）
+                    if (
+                        key not in latest_action_by_character
+                        or time_point > latest_action_by_character[key][0]
+                    ):
+                        latest_action_by_character[key] = (time_point, action)
+
+        # 按时间点排序显示每个角色的最新行动
+        sorted_actions = sorted(
+            latest_action_by_character.items(),
+            key=lambda x: x[1][0],  # 按时间点排序
+        )
+
+        if sorted_actions:
+            for (user_id, char_name), (time_point, action) in sorted_actions:
+                # 检查角色状态
+                user_participants = battle["participants"].get(user_id, {})
+                char_info = user_participants.get(char_name, {})
+
+                if char_info.get("status") != "参与中":
+                    continue
+
+                time_str = TimelineFormatter._format_time_str(time_point)
 
                 # 时间分隔符
                 dashes = "—" * 5
                 lines.append(f"\n{dashes} {time_str}t {dashes}")
 
-                for (user_id, char_name), action in latest_actions_by_character.items():
-                    # 检查角色状态
-                    user_participants = battle["participants"].get(user_id, {})
-                    char_info = user_participants.get(char_name, {})
-
-                    if char_info.get("status") != "参与中":
-                        continue
-
-                    # 获取行动详情
-                    action_lines = TimelineFormatter._format_action(
-                        action, attribute_label
-                    )
-                    lines.extend(action_lines)
+                # 获取行动详情
+                action_lines = TimelineFormatter._format_action(action, attribute_label)
+                lines.extend(action_lines)
 
         # 显示定时事件
         scheduled_events = battle.get("scheduled_events", [])
@@ -122,12 +138,10 @@ class TimelineFormatter:
     @staticmethod
     def _format_time_str(time_point: float) -> str:
         """格式化时间点字符串"""
-        return (
-            f"{time_point:.1f}" if time_point.is_integer() else f"{time_point}"
-        )
+        return f"{time_point:.1f}" if time_point.is_integer() else f"{time_point}"
 
     @staticmethod
-    def _format_action(action: Dict, attribute_label: str) -> List[str]:
+    def _format_action(action: dict, attribute_label: str) -> list[str]:
         """
         格式化单个行动
 
@@ -167,8 +181,8 @@ class TimelineFormatter:
 
     @staticmethod
     def _format_scheduled_events(
-        scheduled_events: List[Dict], current_time: float
-    ) -> List[str]:
+        scheduled_events: list[dict], current_time: float
+    ) -> list[str]:
         """格式化定时事件"""
         lines = []
 
@@ -193,7 +207,7 @@ class TimelineFormatter:
         return lines
 
     @staticmethod
-    def _format_extra_info(extra_info: Dict) -> str:
+    def _format_extra_info(extra_info: dict) -> str:
         """格式化额外信息（如弹药）"""
         lines = []
 

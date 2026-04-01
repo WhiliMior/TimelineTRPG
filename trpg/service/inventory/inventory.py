@@ -4,14 +4,13 @@
 """
 
 import re
-from typing import Dict, List, Optional
 from datetime import datetime
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
-from ...infrastructure.help import HelpEntry
-from ...infrastructure.storage import StorageBackend, StorageType
 from ...infrastructure.config.game_config import game_config
+from ...infrastructure.help import HelpEntry
+from ...infrastructure.storage import StorageBackend
 
 
 class InventoryModule:
@@ -196,13 +195,13 @@ class InventoryModule:
         ctx.send(response)
         return True
 
-    async def _get_active_character(self, user_id: str) -> Optional[Dict]:
+    async def _get_active_character(self, user_id: str) -> dict | None:
         """获取用户当前激活的角色"""
         from ..character.character import character_module
 
         return await character_module.get_active_character(user_id)
 
-    async def _get_inventory_data(self, user_id: str) -> Dict:
+    async def _get_inventory_data(self, user_id: str) -> dict:
         """获取角色背包数据"""
         character = await self._get_active_character(user_id)
         if not character:
@@ -225,7 +224,7 @@ class InventoryModule:
             "cash_records": inventory.get("cash_records", []),
         }
 
-    async def _initialize_inventory(self, user_id: str, character: Dict) -> bool:
+    async def _initialize_inventory(self, user_id: str, character: dict) -> bool:
         """
         初始化角色背包数据
         仅在 inventory 不存在时创建，使用 CharacterReader 计算初始现金
@@ -243,15 +242,13 @@ class InventoryModule:
         character["inventory"] = {"items": [], "cash": initial_cash, "cash_records": []}
 
         # 通过StorageBackend保存
-        from ...infrastructure.storage import StorageBackend
 
         return StorageBackend.update_character(
             user_id, character.get("name"), character
         )
 
-    async def _save_inventory_data(self, user_id: str, inventory_data: Dict) -> bool:
+    async def _save_inventory_data(self, user_id: str, inventory_data: dict) -> bool:
         """保存角色背包数据 - 通过StorageBackend保存到角色inventory字段中"""
-        from ...infrastructure.storage import StorageBackend
 
         character = await self._get_active_character(user_id)
         if not character:
@@ -512,7 +509,7 @@ class InventoryModule:
         else:
             return self.reply.render("save_failed")
 
-    async def _del_multiple_items(self, user_id: str, indices: List[int]) -> str:
+    async def _del_multiple_items(self, user_id: str, indices: list[int]) -> str:
         """删除多个物品"""
         character = await self._get_active_character(user_id)
         if not character:
@@ -551,7 +548,7 @@ class InventoryModule:
                 return self.reply.render(
                     "item_multi_deleted_partial",
                     valid=len(valid_indices),
-                    invalid=len(invalid_indices)
+                    invalid=len(invalid_indices),
                 )
             else:
                 return self.reply.render("item_multi_deleted", count=len(valid_indices))

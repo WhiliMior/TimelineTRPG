@@ -10,8 +10,6 @@
 - 删除武器
 """
 
-from typing import Dict, List, Optional
-
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
@@ -94,7 +92,7 @@ class WeaponModule:
 
         return True
 
-    def _parse_weapon_args(self, args: str) -> Optional[Dict]:
+    def _parse_weapon_args(self, args: str) -> dict | None:
         """
         解析武器参数
         格式: 名称:值,类型:值,...
@@ -249,13 +247,24 @@ class WeaponModule:
                 ctx.send(result)
             else:
                 # 支持多个数字输入，如 del 1 4 5
-                indices = [int(x) - 1 for x in ctx.args[1:] if x.isdigit()]
-                if not indices:
+                # 不提前减1，由各自方法处理
+                single_index = None
+                multiple_indices = []
+                for x in ctx.args[1:]:
+                    if x.isdigit():
+                        idx = int(x)
+                        if single_index is None:
+                            single_index = idx
+                        multiple_indices.append(idx)
+
+                if not single_index:
                     result = self.reply.render("invalid_number")
-                elif len(indices) == 1:
-                    result = await self._delete_weapon(user_id, indices[0])
+                elif len(multiple_indices) == 1:
+                    result = await self._delete_weapon(user_id, single_index)
                 else:
-                    result = await self._delete_multiple_weapons(user_id, indices)
+                    result = await self._delete_multiple_weapons(
+                        user_id, multiple_indices
+                    )
                 ctx.send(result)
 
         elif command.isdigit():
@@ -279,12 +288,12 @@ class WeaponModule:
 
         return character_module
 
-    async def _get_active_character(self, user_id: str) -> Optional[Dict]:
+    async def _get_active_character(self, user_id: str) -> dict | None:
         """获取用户当前激活的角色"""
         char_module = await self._get_character_module()
         return await char_module.get_active_character(user_id)
 
-    async def _get_weapons(self, user_id: str) -> List[Dict]:
+    async def _get_weapons(self, user_id: str) -> list[dict]:
         """获取武器列表 - 从角色weapons字段中获取"""
         active_char = await self._get_active_character(user_id)
         if not active_char:
@@ -294,7 +303,7 @@ class WeaponModule:
         weapons = active_char.get("weapons", [])
         return weapons
 
-    async def _save_weapons(self, user_id: str, weapons: List[Dict]):
+    async def _save_weapons(self, user_id: str, weapons: list[dict]):
         """保存武器列表 - 通过StorageBackend保存到角色weapons字段中"""
         from ...infrastructure.storage import StorageBackend
 
@@ -308,7 +317,7 @@ class WeaponModule:
         # 通过StorageBackend保存整个角色数据
         StorageBackend.update_character(user_id, active_char.get("name"), active_char)
 
-    async def _create_weapon_from_data(self, user_id: str, weapon_data: Dict) -> str:
+    async def _create_weapon_from_data(self, user_id: str, weapon_data: dict) -> str:
         """从参数字典创建武器"""
         from ...infrastructure.config.game_config import game_config
 
@@ -355,7 +364,7 @@ class WeaponModule:
             "weapon_created", name=active_char.get("name", ""), weapon=weapon["name"]
         )
 
-    async def _create_weapon(self, user_id: str, args: List[str]) -> str:
+    async def _create_weapon(self, user_id: str, args: list[str]) -> str:
         """创建武器"""
         active_char = await self._get_active_character(user_id)
         if not active_char:
@@ -489,12 +498,13 @@ class WeaponModule:
         )
 
     async def _delete_weapon(self, user_id: str, index: int) -> str:
-        """删除武器"""
+        """删除武器（接收1-based索引）"""
         weapons = await self._get_weapons(user_id)
 
         if not weapons:
             return self.reply.render("weapon_list_empty")
 
+        # 1-based索引验证
         if index < 1 or index > len(weapons):
             return self.reply.render("invalid_index")
 
@@ -514,43 +524,46 @@ class WeaponModule:
 
         return self.reply.render("all_weapons_deleted")
 
-    async def _delete_multiple_weapons(self, user_id: str, indices: List[int]) -> str:
-        """删除多个武器"""
+    async def _delete_multiple_weapons(self, user_id: str, indices: list[int]) -> str:
+        """删除多个武器（接收1-based索引列表）"""
         weapons = await self._get_weapons(user_id)
 
         if not weapons:
             return self.reply.render("weapon_list_empty")
 
-        # 验证序号
+        # 验证序号（1-based索引）
         invalid_indices = []
         valid_indices = []
 
         for idx in indices:
-            if 0 <= idx < len(weapons):
+            # 1-based索引：有效范围是 1 <= idx <= len(weapons)
+            if 1 <= idx <= len(weapons):
                 valid_indices.append(idx)
             else:
-                invalid_indices.append(idx + 1)
+                invalid_indices.append(idx)
 
         if not valid_indices:
             return self.reply.render("invalid_index")
 
-        # 从后往前删除，避免索引偏移
+        # 从后往前删除，避免索引偏移（转换为0-based后pop）
         for idx in sorted(valid_indices, reverse=True):
-            weapons.pop(idx)
+            weapons.pop(idx - 1)
 
         if await self._save_weapons(user_id, weapons):
             if invalid_indices:
                 return self.reply.render(
                     "weapon_multi_deleted_partial",
                     valid=len(valid_indices),
-                    invalid=len(invalid_indices)
+                    invalid=len(invalid_indices),
                 )
             else:
-                return self.reply.render("weapon_multi_deleted", count=len(valid_indices))
+                return self.reply.render(
+                    "weapon_multi_deleted", count=len(valid_indices)
+                )
         else:
             return self.reply.render("save_failed")
 
-    async def get_equipped_weapon(self, user_id: str) -> Optional[Dict]:
+    async def get_equipped_weapon(self, user_id: str) -> dict | None:
         """获取当前装备的武器"""
         weapons = await self._get_weapons(user_id)
 
