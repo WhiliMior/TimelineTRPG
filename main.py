@@ -40,6 +40,9 @@ from .trpg.service.weapon.weapon import weapon_module
 # 导入 infrastructure 层的指令转发器
 from .trpg.infrastructure.command_dispatcher import command_dispatcher
 
+# 导入 batch_command 层（触发指令注册）
+from .trpg.batch_command.character_reset import character_reset_module
+
 # 插件信息
 PLUGIN_NAME = "TimelineTRPG"
 PLUGIN_VERSION = "v0.1"

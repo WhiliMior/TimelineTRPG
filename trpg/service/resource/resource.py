@@ -408,22 +408,21 @@ class ResourceRecordModule:
 
         # 筛选适用的修饰
         # 1. 范围匹配
-        # 2. 修饰类型匹配（变化类型匹配修饰类型，或者修饰类型为"所有"/空）
+        # 2. 修饰类型匹配：
+        #    - 通配符类型（空/"所有"/"通用"）匹配任何变化类型
+        #    - 具体类型需要精确匹配用户指定的类型
         applicable_modifiers = []
         for mod in modifiers:
             mod_range = mod.get("range", "")
             if mod_range not in target_ranges:
                 continue
 
-            # 检查修饰类型匹配 - 直接比较原始字符串
+            # 检查修饰类型匹配
             raw_mod_type = mod.get("type", "所有")
-            # 空字符串、"所有"、"通用"都视为通配符类型
+            # 通配符类型：空字符串、"所有"、"通用"匹配任何变化类型
             if not raw_mod_type or raw_mod_type in ["所有", "通用"]:
-                # 通配符类型，匹配任何变化类型
-                if normalized_change_type is None:
-                    applicable_modifiers.append(mod)
-                else:
-                    continue  # 通配符对具体类型不做匹配，继续
+                # 通配符类型，匹配任何变化类型（包括 None 和具体类型）
+                applicable_modifiers.append(mod)
             else:
                 # 精确匹配：用户输入什么就匹配什么
                 if normalized_change_type is None:
