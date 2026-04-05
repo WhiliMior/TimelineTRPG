@@ -37,6 +37,9 @@ from .trpg.service.resource.modifier import resource_modifier_module
 from .trpg.service.resource.resource import resource_record_module
 from .trpg.service.weapon.weapon import weapon_module
 
+# 导入 infrastructure 层的指令转发器
+from .trpg.infrastructure.command_dispatcher import command_dispatcher
+
 # 插件信息
 PLUGIN_NAME = "TimelineTRPG"
 PLUGIN_VERSION = "v0.1"
@@ -87,7 +90,7 @@ class TimelineTRPG(Star):
         self.router.register("r", self._wrap_with_sub_help(roll_dice_module, "r"))
         self.router.register("ex", self._wrap_with_sub_help(examination_module, "ex"))
         self.router.register("tar", self._wrap_with_sub_help(target_module, "tar"))
-        self.router.register("chr", self._wrap_with_sub_help(character_module, "chr"))
+        self.router.register("chr", self._wrap_chr_with_batch_reset(character_module))
         self.router.register(
             "char", self._wrap_with_sub_help(character_module, "chr")
         )  # 老项目别名
@@ -166,6 +169,39 @@ class TimelineTRPG(Star):
                 return await handler(ctx)
 
             return await handler(ctx)
+
+        return wrapped
+
+    def _wrap_chr_with_batch_reset(self, chr_module):
+        """
+        包装 chr 命令处理函数，优先处理 reset 子命令。
+
+        - 如果第一个参数是 "reset"，通过 infrastructure 层的 command_dispatcher 转发
+        - 否则委托给 service 层的 character_module 处理
+
+        注意：通过 command_dispatcher 转发保持了层级间的单向引用特性
+        """
+        chr_handler = getattr(chr_module, "chr", None)
+
+        if chr_handler is None:
+            raise AttributeError(f"模块 {chr_module!r} 没有方法 'chr'")
+
+        async def wrapped(ctx: CommandContext) -> bool:
+            # 如果第一个参数是 "reset"，通过 command_dispatcher 转发到 batch_command 层
+            if ctx.args and ctx.args[0].lower() == "reset":
+                # 通过 infrastructure 层转发，保持单向引用
+                result = command_dispatcher.dispatch("chr_reset", ctx)
+                # command_dispatcher.dispatch 返回 None 表示未找到处理器
+                # 此时我们需要确保回复已被发送
+                if not ctx.has_reply():
+                    # 没有回复，说明 batch_command 没有处理成功
+                    # 可以在这里添加降级处理或返回错误
+                    ctx.send("角色重置失败，请确保您有激活的角色")
+                    return True
+                return True
+
+            # 其他情况委托给 service 层
+            return await chr_handler(ctx)
 
         return wrapped
 

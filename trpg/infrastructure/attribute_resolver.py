@@ -301,6 +301,45 @@ class AttributeResolver:
             return SCOPE_ATTRIBUTES[scope]
         return []
 
+    @staticmethod
+    def matches_character_attribute(
+        character_data: dict, target_standard_attribute: str
+    ) -> bool:
+        """
+        检查角色数据中是否存在与目标标准属性对应的属性
+
+        支持标准属性名和所有别名（包括英文别名如 strength, dex 等）
+
+        Args:
+            character_data: 角色数据字典，键为属性名，值为属性值
+            target_standard_attribute: 目标标准属性名（如"力量"）
+
+        Returns:
+            True 如果角色数据中存在对应的属性，False 否则
+
+        Example:
+            >>> char_data = {"strength": 16, "dex": 14}
+            >>> AttributeResolver.matches_character_attribute(char_data, "力量")
+            True
+            >>> AttributeResolver.matches_character_attribute(char_data, "敏捷")
+            True
+            >>> AttributeResolver.matches_character_attribute(char_data, "智力")
+            False
+        """
+        if not character_data or not target_standard_attribute:
+            return False
+
+        # 获取目标属性的所有可能名称（标准名 + 所有别名）
+        all_names = [target_standard_attribute]
+        all_names.extend(AttributeResolver.get_aliases_for(target_standard_attribute))
+
+        # 检查角色数据中是否有任何匹配的键
+        for name in all_names:
+            if name in character_data:
+                return True
+
+        return False
+
 
 # 全局单例
 attribute_resolver = AttributeResolver()

@@ -186,6 +186,7 @@ class TimelineFormatter:
         """格式化定时事件"""
         lines = []
 
+        # 时间模式事件
         time_based_events = [
             e
             for e in scheduled_events
@@ -194,15 +195,33 @@ class TimelineFormatter:
             and current_time < e.get("end_time", 0)
         ]
 
-        if time_based_events:
+        # 次数模式事件
+        count_based_events = [
+            e
+            for e in scheduled_events
+            if e.get("mode") == "count_based"
+            and e.get("remaining_count") is not None
+            and e.get("remaining_count") > 0
+        ]
+
+        if time_based_events or count_based_events:
             lines.append("\n【定时事件】")
+
+            # 时间模式事件
             for event in time_based_events:
-                # 优先显示回调消息，否则显示行动描述
                 event_desc = event.get("callback_message") or event.get(
                     "action_description", ""
                 )
                 end_time = game_config.round_value(event.get("end_time", 0), "time")
                 lines.append(f"  {end_time}t - {event_desc}")
+
+            # 次数模式事件
+            for event in count_based_events:
+                event_desc = event.get("callback_message") or event.get(
+                    "action_description", ""
+                )
+                remaining = event.get("remaining_count", 0)
+                lines.append(f"  ×{remaining} - {event_desc}")
 
         return lines
 

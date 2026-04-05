@@ -336,7 +336,10 @@ class BuffModule:
         from ...infrastructure.attribute_resolver import AttributeResolver
 
         if not AttributeResolver.is_scope(resolved_attribute):
-            if resolved_attribute not in char_data:
+            # 使用 matches_character_attribute 检查，该方法支持英文别名
+            if not AttributeResolver.matches_character_attribute(
+                char_data, resolved_attribute
+            ):
                 return self.reply.render(
                     "attribute_not_found", attribute=resolved_attribute
                 )
@@ -345,19 +348,29 @@ class BuffModule:
 
         created_at = datetime.now().isoformat()
 
+        # 判断模式：时间模式（xt）或次数模式（x）
+        mode = (
+            "time_based"
+            if (isinstance(duration, str) and duration.endswith("t"))
+            else "count_based"
+            if duration is not None
+            else None
+        )
+
         buff = {
             "name": buff_name,
             "attribute": resolved_attribute,
             "type": buff_type,
             "value": value,
             "duration": duration,
+            "mode": mode,  # 记录模式：time_based, count_based, 或 None
             "created_at": created_at,
         }
 
         buffs.append(buff)
         await self._save_buffs(user_id, buffs)
 
-        # 如果有持续时间，调度战斗事件
+        # 如果有持续时间或次数，调度战斗事件
         if duration is not None:
             # 构建描述
             action_desc = (
@@ -370,11 +383,6 @@ class BuffModule:
             # 直接调用 scheduler 调度事件
             from ...infrastructure.scheduler import schedule_event
 
-            mode = (
-                "time_based"
-                if (isinstance(duration, str) and duration.endswith("t"))
-                else "count_based"
-            )
             duration_value = (
                 float(duration[:-1])
                 if (isinstance(duration, str) and duration.endswith("t"))

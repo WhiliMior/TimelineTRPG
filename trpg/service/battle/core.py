@@ -84,7 +84,10 @@ class TimelineCore:
                 user_id = action.get("user_id", "")
                 char_name = action.get("character_name", "")
                 key = (user_id, char_name)
-                if key not in latest_action_by_character or end_time > latest_action_by_character[key]:
+                if (
+                    key not in latest_action_by_character
+                    or end_time > latest_action_by_character[key]
+                ):
                     latest_action_by_character[key] = end_time
 
         # 收集所有"参与中"角色的最新行动结束时间
@@ -126,7 +129,10 @@ class TimelineCore:
                 user_id = action.get("user_id", "")
                 char_name = action.get("character_name", "")
                 key = (user_id, char_name)
-                if key not in latest_action_by_character or end_time > latest_action_by_character[key]:
+                if (
+                    key not in latest_action_by_character
+                    or end_time > latest_action_by_character[key]
+                ):
                     latest_action_by_character[key] = end_time
 
         # 收集所有"参与中"角色的最新行动结束时间

@@ -226,6 +226,7 @@ class WeaponModule:
             # 创建武器
             result = await self._create_weapon(user_id, ctx.args[1:])
             ctx.send(result)
+            return True
 
         elif command == "show":
             if len(ctx.args) < 2:
@@ -237,14 +238,17 @@ class WeaponModule:
                 except ValueError:
                     result = self.reply.render("invalid_number")
             ctx.send(result)
+            return True
 
         elif command == "del":
             if len(ctx.args) < 2:
                 result = self.reply.render("need_item_index")
                 ctx.send(result)
+                return True
             elif ctx.args[1].lower() == "all":
                 result = await self._delete_all_weapons(user_id)
                 ctx.send(result)
+                return True
             else:
                 # 支持多个数字输入，如 del 1 4 5
                 # 不提前减1，由各自方法处理
@@ -266,6 +270,7 @@ class WeaponModule:
                         user_id, multiple_indices
                     )
                 ctx.send(result)
+                return True
 
         elif command.isdigit():
             try:
@@ -275,6 +280,7 @@ class WeaponModule:
             except ValueError:
                 result = self.reply.render("invalid_number")
                 ctx.send(result)
+            return True
 
         else:
             result = await self._list_weapons(user_id)

@@ -40,29 +40,8 @@ def _execute_callback(callback_path: str, callback_args: dict):
 
     module_path, function_name = parts
 
-    # 查找 TimelineTRPG 相关模块以确定正确的包前缀
-    plugin_prefix = None
-    for name in sys.modules:
-        if "TimelineTRPG" in name and name.startswith("TimelineTRPG"):
-            plugin_prefix = "TimelineTRPG"
-            break
-
-    if plugin_prefix is None:
-        # 备用方案：从 sys.modules 中查找包含 trpg.service 的模块
-        for name in sys.modules:
-            if ".trpg.service." in name:
-                parts = name.split(".")
-                if "trpg" in parts:
-                    idx = parts.index("trpg")
-                    plugin_prefix = ".".join(parts[:idx])
-                    break
-
-    if plugin_prefix is None:
-        print(f"Error: Cannot find plugin prefix for callback {callback_path}")
-        return
-
-    # 完整的模块路径
-    full_module_path = f"{plugin_prefix}.{module_path}"
+    # 首先尝试直接导入模块路径
+    full_module_path = module_path
 
     # 使用 importlib 动态导入模块和函数
     try:
@@ -254,6 +233,73 @@ class SchedulerModule:
 
         return executed_messages
 
+    def decrement_count_based_events(
+        self,
+        conversation_id: str,
+        user_id: str,
+        character_name: str,
+        is_group: bool = True,
+    ) -> list[str]:
+        """
+        递减指定角色的次数模式事件的剩余次数，并执行到期的回调
+
+        Args:
+            conversation_id: 会话ID
+            user_id: 用户ID
+            character_name: 角色名
+            is_group: 是否为群聊
+
+        Returns:
+            List[str]: 执行结果消息列表（次数耗尽时执行的回调消息）
+        """
+        storage_key = conversation_id
+        battle = self._get_battle(storage_key, is_group)
+
+        if not battle.get("name"):
+            return []
+
+        scheduled_events = battle.get("scheduled_events", [])
+        executed_messages = []
+        events_to_remove = []
+
+        for i, event in enumerate(scheduled_events):
+            # 检查是否为该用户和角色的次数模式事件
+            if (
+                event.get("user_id") == user_id
+                and event.get("character_name") == character_name
+                and event.get("mode") == "count_based"
+                and event.get("remaining_count") is not None
+            ):
+                # 递减剩余次数
+                event["remaining_count"] -= 1
+
+                # 检查是否已达到次数限制
+                if event["remaining_count"] <= 0:
+                    # 执行回调
+                    if "callback_path" in event and event["callback_path"]:
+                        try:
+                            callback_path = event["callback_path"]
+                            callback_args = event.get("callback_args", {})
+
+                            _execute_callback(callback_path, callback_args)
+                            executed_messages.append(event.get("callback_message", ""))
+                        except Exception as e:
+                            print(f"Error executing count_based event callback: {e}")
+
+                    # 标记为删除
+                    events_to_remove.append(i)
+
+        # 从后往前删除次数耗尽的事件
+        for i in reversed(events_to_remove):
+            if i < len(scheduled_events):
+                del scheduled_events[i]
+
+        # 保存更新后的事件列表
+        # 无论是否有事件被删除，都需要保存递减后的数据
+        self._save_battle(storage_key, battle, is_group)
+
+        return executed_messages
+
     def _get_battle(self, storage_key: str, is_group: bool = True) -> dict:
         """获取战斗数据"""
         data = StorageBackend.load_battle_timeline(storage_key, is_group)
@@ -336,4 +382,24 @@ def schedule_event(
         mode,
         event_type,
         is_group,
+    )
+
+
+def decrement_count_based_events(
+    conversation_id: str, user_id: str, character_name: str, is_group: bool = True
+) -> list[str]:
+    """
+    递减指定角色的次数模式事件的剩余次数（便捷函数）
+
+    Args:
+        conversation_id: 会话ID
+        user_id: 用户ID
+        character_name: 角色名
+        is_group: 是否为群聊
+
+    Returns:
+        List[str]: 执行结果消息列表
+    """
+    return scheduler_module.decrement_count_based_events(
+        conversation_id, user_id, character_name, is_group
     )

@@ -249,5 +249,10 @@
     "command_not_found": "未知指令: {command}，使用 .help 查看可用指令",
     "internal_error": "内部错误: {error}",
     "help_not_found": "未找到模块 \"{module}\" 的帮助信息，使用 .help 查看可用模块"
+  },
+  "character_reset": {
+    "reset_success": "=== 角色状态重置完成 ===\n{details}",
+    "reset_partial": "=== 角色状态重置完成(部分) ===\n{details}\n\n错误:\n{errors}",
+    "help": "chr reset 指令帮助"
   }
 }

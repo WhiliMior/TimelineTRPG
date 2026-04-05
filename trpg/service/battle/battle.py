@@ -712,6 +712,17 @@ class BattleModule:
 
                 # 检查是否已达到次数限制
                 if event["remaining_count"] <= 0:
+                    # 执行回调
+                    if "callback_path" in event and event["callback_path"]:
+                        from ...infrastructure.scheduler import _execute_callback
+
+                        try:
+                            callback_path = event["callback_path"]
+                            callback_args = event.get("callback_args", {})
+                            _execute_callback(callback_path, callback_args)
+                        except Exception as e:
+                            print(f"Error executing count_based event callback: {e}")
+
                     events_to_remove.append(i)
 
         # 从后往前删除已达到次数限制的事件
@@ -720,6 +731,7 @@ class BattleModule:
 
         # 保存数据
         if events_to_remove:
+            battle["scheduled_events"] = scheduled_events
             self._save_battle(storage_key, battle, is_group)
 
     async def _insert_action(
