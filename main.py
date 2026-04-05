@@ -190,7 +190,7 @@ class TimelineTRPG(Star):
             # 如果第一个参数是 "reset"，通过 command_dispatcher 转发到 batch_command 层
             if ctx.args and ctx.args[0].lower() == "reset":
                 # 通过 infrastructure 层转发，保持单向引用
-                result = command_dispatcher.dispatch("chr_reset", ctx)
+                result = await command_dispatcher.dispatch("chr_reset", ctx)
                 # command_dispatcher.dispatch 返回 None 表示未找到处理器
                 # 此时我们需要确保回复已被发送
                 if not ctx.has_reply():

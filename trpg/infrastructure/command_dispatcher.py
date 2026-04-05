@@ -8,9 +8,10 @@
 
 使用方式：
 1. batch_command 层注册指令: dispatcher.register("chr_reset", handler)
-2. service 层通过转发器调用: dispatcher.dispatch("chr_reset", ctx)
+2. service 层通过转发器调用: await dispatcher.dispatch("chr_reset", ctx)
 """
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -38,7 +39,7 @@ class CommandDispatcher:
         """
         self._handlers[command_key] = handler
 
-    def dispatch(self, command_key: str, ctx: "CommandContext") -> bool | None:
+    async def dispatch(self, command_key: str, ctx: "CommandContext") -> bool | None:
         """
         转发指令到已注册的处理函数
 
@@ -53,6 +54,9 @@ class CommandDispatcher:
         if handler is None:
             return None
 
+        # 如果是协程函数，需要 await
+        if asyncio.iscoroutinefunction(handler):
+            return await handler(ctx)
         return handler(ctx)
 
     def has_command(self, command_key: str) -> bool:
