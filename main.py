@@ -95,7 +95,7 @@ class TimelineTRPG(Star):
         self.router.register("tar", self._wrap_with_sub_help(target_module, "tar"))
         self.router.register("chr", self._wrap_chr_with_batch_reset(character_module))
         self.router.register(
-            "char", self._wrap_with_sub_help(character_module, "chr")
+            "char", self._wrap_chr_with_batch_reset(character_module)
         )  # 老项目别名
         self.router.register("buff", self._wrap_with_sub_help(buff_module, "buff"))
         self.router.register(
@@ -194,13 +194,19 @@ class TimelineTRPG(Star):
             if ctx.args and ctx.args[0].lower() == "reset":
                 # 通过 infrastructure 层转发，保持单向引用
                 result = await command_dispatcher.dispatch("chr_reset", ctx)
+
                 # command_dispatcher.dispatch 返回 None 表示未找到处理器
-                # 此时我们需要确保回复已被发送
-                if not ctx.has_reply():
-                    # 没有回复，说明 batch_command 没有处理成功
-                    # 可以在这里添加降级处理或返回错误
-                    ctx.send("角色重置失败，请确保您有激活的角色")
+                if result is None and not ctx.has_reply():
+                    ctx.send("角色重置失败：未找到重置处理器")
                     return True
+
+                # batch_command 层的处理函数返回结果文本但不会自行发送，
+                # 这里负责将转发结果回复给用户
+                if not ctx.has_reply():
+                    if result:
+                        ctx.send(result)
+                    else:
+                        ctx.send("角色重置失败，请确保您有激活的角色")
                 return True
 
             # 其他情况委托给 service 层
@@ -230,23 +236,23 @@ class TimelineTRPG(Star):
         ctx.send(detail)
         return True
 
-    @filter.regex(r"^[.。#/](\w+)\b")
+    @filter.regex(r"^[.。/](\w+)\b")
     async def trpg_command_handler(
         self, event: AstrMessageEvent
     ) -> Generator[MessageEventResult, None, None]:
         """
         TRPG 指令统一入口
-        匹配所有 .。#/ 开头的指令，如 .help, 。r, #bt 等
+        匹配所有 .。/ 开头的指令，如 .help, 。r, /bt 等
 
         数据流：
-        1. 匹配 ".指令" 格式（支持 . 。 # / 四种前缀）
+        1. 匹配 ".指令" 格式（支持 . 。 / 三种前缀）
         2. 创建 CommandContext
         3. 通过 Router 分发到对应业务模块
         4. 将 ReplyPayload 转换为 event.plain_result()
         """
         message_str = event.message_str.strip()
 
-        match = re.match(r"^[.。#/](\w+)\b\s*(.*)$", message_str)
+        match = re.match(r"^[.。/](\w+)\b\s*(.*)$", message_str)
         if not match:
             yield event.plain_result("指令格式错误")
             return

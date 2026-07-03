@@ -22,6 +22,28 @@ from ..adapter.message import ReplyManager
 from .storage import StorageBackend
 
 
+def _resolve_current_time(battle: dict) -> float:
+    """
+    实时计算战斗的当前时间点。
+
+    current_time 不再持久化到文件（由 timeline_core 实时计算），
+    因此调度器必须根据 timeline 数据即时推算，否则会一直读到过期的 0 值，
+    导致带持续时间的事件（如资源修饰 dr）永远无法到期删除。
+
+    Args:
+        battle: 战斗数据字典
+
+    Returns:
+        float: 当前时间点，计算失败时回退到已存储的值
+    """
+    try:
+        from ..service.battle.core import TimelineCore
+
+        return TimelineCore().get_current_time(battle)
+    except Exception:
+        return battle.get("current_time", 0)
+
+
 def _execute_callback(callback_path: str, callback_args: dict):
     """
     执行回调函数（统一处理异步事件循环）
@@ -133,8 +155,8 @@ class SchedulerModule:
         if not battle.get("name"):
             return False
 
-        # 获取当前时间点
-        current_time = battle.get("current_time", 0)
+        # 获取当前时间点（实时计算，避免读取到未持久化的过期值）
+        current_time = _resolve_current_time(battle)
 
         # 创建事件对象
         event = {
@@ -190,18 +212,19 @@ class SchedulerModule:
         if not battle.get("name"):
             return []
 
-        current_time = battle.get("current_time", 0)
+        # 实时计算当前时间点（current_time 不再持久化到文件）
+        current_time = _resolve_current_time(battle)
         scheduled_events = battle.get("scheduled_events", [])
 
         executed_messages = []
         events_to_remove = []
 
         for i, event in enumerate(scheduled_events):
-            # 检查是否为时间模式且已到期（大于结束时间，而非大于等于）
+            # 检查是否为时间模式且已到期（达到或超过结束时间即到期）
             if (
                 event.get("mode") == "time_based"
                 and event.get("end_time") is not None
-                and current_time > event.get("end_time", 0)
+                and current_time >= event.get("end_time", 0)
             ):
                 # 如果指定了用户ID，只执行该用户的事件
                 if user_id is not None and event.get("user_id") != user_id:

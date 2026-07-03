@@ -252,7 +252,7 @@
   },
   "character_reset": {
     "reset_success": "=== 角色状态重置完成 ===\n{details}",
-    "reset_partial": "=== 角色状态重置完成(部分) ===\n{details}\n\n错误:\n{errors}",
+    "reset_partial": "=== 角色状态重置完成(部分) ===\n{success}\n\n错误:\n{errors}",
     "help": "chr reset 指令帮助"
   }
 }

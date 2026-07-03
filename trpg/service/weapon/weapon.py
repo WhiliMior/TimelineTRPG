@@ -71,9 +71,9 @@ class WeaponModule:
         # 获取原始命令文本 (message_str 包含完整指令如 ".setupWP 名称:...")
         raw_args = ctx.metadata.get("message_str", "") or ""
         # 去掉前缀 ".setupWP"
-        if raw_args.startswith((".", "。", "#", "/")):
+        if raw_args.startswith((".", "。", "/")):
             # 找到第一个空格的位置，去掉前缀和命令
-            prefix_match = re.match(r"^[.。#/](\w+)\s*(.*)$", raw_args)
+            prefix_match = re.match(r"^[.。/](\w+)\s*(.*)$", raw_args)
             if prefix_match:
                 raw_args = prefix_match.group(2)
 
