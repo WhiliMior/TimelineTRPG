@@ -165,7 +165,7 @@ TimelineTRPG/
 | `r` | dice | 掷骰 |
 | `ex` | examination | 检定 |
 | `tar` | target | 目标值 |
-| `chr` / `char` | character | 角色管理（含 reset 转发） |
+| `chr` | character | 角色管理（含 reset 转发） |
 | `buff` | buff | Buff |
 | `dr` / `resmod` | resource/modifier | 资源修正 |
 | `rc` | resource/resource | 资源记录 HP/MP/护盾 |
@@ -186,7 +186,7 @@ TimelineTRPG/
 
 ### chr reset 转发
 
-- `.chr reset` / `.char reset` → `command_dispatcher.dispatch("chr_reset", ctx)`
+- `.chr reset` → `command_dispatcher.dispatch("chr_reset", ctx)`
 - 处理器: `batch_command/character_reset.py` 的 `_reset_character_state`
 - 组合: rc reset + dr del all + buff del all
 - **重要**: batch 处理函数返回字符串，wrapper 必须 `ctx.send(result)`

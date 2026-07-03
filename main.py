@@ -94,9 +94,6 @@ class TimelineTRPG(Star):
         self.router.register("ex", self._wrap_with_sub_help(examination_module, "ex"))
         self.router.register("tar", self._wrap_with_sub_help(target_module, "tar"))
         self.router.register("chr", self._wrap_chr_with_batch_reset(character_module))
-        self.router.register(
-            "char", self._wrap_chr_with_batch_reset(character_module)
-        )  # 老项目别名
         self.router.register("buff", self._wrap_with_sub_help(buff_module, "buff"))
         self.router.register(
             "dr", self._wrap_with_sub_help(resource_modifier_module, "dr")
