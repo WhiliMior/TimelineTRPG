@@ -108,6 +108,7 @@ class ResourceModifierModule:
                 type_input = arg
 
             conversation_id = ctx.group_id or ctx.session_id or user_id
+            is_group = ctx.group_id is not None
             result = await self._add_modifier(
                 user_id,
                 conversation_id,
@@ -116,6 +117,7 @@ class ResourceModifierModule:
                 value_str,
                 type_input,
                 duration,
+                is_group,
             )
             ctx.send(result)
             return True
@@ -312,6 +314,7 @@ class ResourceModifierModule:
         value_str: str,
         type_input: str,
         duration: str,
+        is_group: bool = True,
     ) -> str:
         """添加资源修饰"""
         character = await self._get_active_character(user_id)
@@ -359,6 +362,7 @@ class ResourceModifierModule:
                 normalized_range,
                 value_str,
                 character_name,
+                is_group,
             )
 
         if await self._save_modifiers(user_id, modifiers):
@@ -477,6 +481,7 @@ class ResourceModifierModule:
         range_val: str,
         value: str,
         character_name: str = "未知角色",
+        is_group: bool = True,
     ):
         """
         调度资源修饰到期事件
@@ -512,6 +517,7 @@ class ResourceModifierModule:
             callback_message=callback_msg,
             mode=mode,
             event_type="modifier",
+            is_group=is_group,
         )
 
 

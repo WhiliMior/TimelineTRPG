@@ -1,0 +1,276 @@
+---
+description: TimelineTRPG 项目长期记忆：AstrBot 插件配置面板用法、项目架构、关键约定与已知修复
+alwaysApply: true
+---
+
+# TimelineTRPG 项目长期记忆
+
+## 项目定位
+
+- **仓库**: https://github.com/WhiliMior/TimelineTRPG
+- **类型**: AstrBot Star 插件（Timeline TRPG 跑团机器人）
+- **插件名** (`metadata.yaml`): `astrbot_plugin_TimelineTRPG`，展示名 `TimelineTRPG`
+- **安装位置**: `AstrBot/data/plugins/` 下
+- **运行时依赖**: AstrBot 框架（`astrbot.api`），本地开发需 clone AstrBot 本体并热重载插件
+
+## AstrBot 插件配置面板（把参数暴露到 WebUI）
+
+> 官方文档: https://docs.astrbot.app/en/dev/star/guides/plugin-config.html
+> 中文: https://docs.astrbot.app/dev/star/guides/plugin-config.html
+
+### 核心机制
+
+1. 在**插件根目录**创建 `_conf_schema.json`（JSON Schema 格式）
+2. AstrBot 加载插件时自动解析 Schema
+3. 生成/更新配置文件: `data/config/<plugin_name>_config.json`
+4. 实例化插件类时，将配置作为第二个参数传入 `__init__`
+
+### 插件类写法
+
+```python
+from astrbot.api import AstrBotConfig
+from astrbot.api.star import Context, Star, register
+
+@register("TimelineTRPG", "WhiliMior", "...", "v0.1")
+class TimelineTRPG(Star):
+    def __init__(self, context: Context, config: AstrBotConfig | None = None):
+        super().__init__(context)
+        self.config = config or {}
+        # 读取: self.config.get("some_key", default)
+        # 保存: self.config.save_config()
+```
+
+**注意**: 当前 `main.py` 的 `__init__` 仅接收 `context`，尚未接入 `AstrBotConfig`。若要使用面板配置，需扩展构造函数签名。
+
+### Schema 字段说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `type` | 是 | `string` / `text` / `int` / `float` / `bool` / `object` / `list` / `dict` / `template_list` / `file` |
+| `description` | 否 | 配置项描述（面板显示） |
+| `hint` | 否 | 问号悬浮提示 |
+| `obvious_hint` | 否 | 是否醒目显示 hint |
+| `default` | 否 | 默认值 |
+| `items` | 否 | `type=object` 时的子 Schema |
+| `invisible` | 否 | `true` 则不在面板显示 |
+| `options` | 否 | 下拉选项列表，如 `["a","b"]` |
+| `editor_mode` | 否 | 启用代码编辑器（AstrBot >= v3.5.10） |
+| `editor_language` | 否 | 编辑器语言，默认 `json` |
+| `editor_theme` | 否 | `vs-light` / `vs-dark` |
+| `_special` | 否 | WebUI 特殊选择器（v4.0.0+） |
+
+### `_special` 常用值（插件可用）
+
+- `select_provider` → 字符串，选择 LLM 提供商
+- `select_provider_tts` / `select_provider_stt` → 语音提供商
+- `select_provider_embedding` / `select_provider_rerank` → Embedding/Rerank 提供商
+- `select_persona` → 字符串，选择人设
+- `select_knowledgebase` → **list**，多选知识库（`type` 应为 `list`，`default: []`）
+
+**勿在插件中使用** AstrBot Core 内部 `_special` 值（如 `select_providers`、`provider_pool`、`persona_pool` 等），随时可能变动。
+
+### 高级类型示例
+
+**嵌套 object**:
+```json
+{
+  "timeline_settings": {
+    "type": "object",
+    "description": "时间线设置",
+    "items": {
+      "time_precision": { "type": "int", "default": 2, "description": "时间小数位" }
+    }
+  }
+}
+```
+
+**dict + template_schema**（带滑块等 UI）: 见官方文档 `dict type schema`
+
+**template_list**（v4.10.4+）: 多模板列表配置，保存时含 `__template_key`
+
+**file**（v4.13.0+）: 文件上传，`file_types` 限制扩展名
+
+### 配置版本管理
+
+- Schema 新增字段 → AstrBot 自动补默认值
+- Schema 删除字段 → 旧配置文件中多余项**不会自动删除**
+- 插件内可调用 `self.config.save_config()` 写回
+
+### 与本项目的潜在对接点
+
+当前游戏精度等配置在 `trpg/infrastructure/config/game_config.json`，由 `.tl acc` 指令修改。
+若需暴露到 AstrBot 面板，可：
+1. 添加 `_conf_schema.json` 定义精度默认值
+2. 在 `main.py.__init__` 接收 `config` 并注入 `game_config`
+3. 保留 `.tl acc` 作为运行时快捷修改，或改为只读面板配置
+
+---
+
+## 项目架构（分层）
+
+```
+AstrBot 消息
+    ↓
+main.py（插件入口，@filter.regex 匹配指令）
+    ↓
+adapter/router.py（Router 路由分发）
+    ↓
+trpg/service/*（业务逻辑：骰子、检定、战斗、角色…）
+    ↓
+trpg/infrastructure/*（存储、调度、配置、工具）
+    ↓
+data/plugin_data/TimelineTRPG/（持久化数据）
+```
+
+### 目录结构
+
+```
+TimelineTRPG/
+├── main.py                 # 插件入口，指令 regex、Router 注册
+├── metadata.yaml           # 插件元信息（市场展示依赖此文件）
+├── adapter/router.py       # 顶层 Router（与 trpg/adapter 配合）
+├── trpg/
+│   ├── adapter/            # CommandContext、ReplyManager（消息抽象）
+│   ├── service/            # 业务模块（battle, buff, character, dice…）
+│   ├── infrastructure/     # storage, scheduler, game_config, help…
+│   └── batch_command/      # 跨模块组合指令（如 chr reset）
+```
+
+### 各层职责
+
+| 层 | 职责 | 是否接触 AstrBot API |
+|----|------|---------------------|
+| `main.py` | 消息入口、创建 CommandContext、发送回复 | 是 |
+| `adapter/` | 指令上下文、回复模板、Router | 否（除 main 引用） |
+| `service/` | TRPG 业务逻辑 | 否 |
+| `infrastructure/` | 存储、调度、配置、工具 | 否 |
+| `batch_command/` | 组合调用多个 service | 仅单向引用 service |
+
+**单向引用原则**: service → infrastructure；batch_command → service；main → adapter + service。跨层组合通过 `command_dispatcher` 转发。
+
+---
+
+## 指令系统
+
+### 前缀（当前实现）
+
+支持: `.` `。` `/`（**不支持** `#`，已从 regex 移除）
+
+匹配正则（`main.py`）: `^[.。/](\w+)\b`
+
+### 路由注册（main.py `_setup_routes`）
+
+| 指令 | 模块 | 说明 |
+|------|------|------|
+| `r` | dice | 掷骰 |
+| `ex` | examination | 检定 |
+| `tar` | target | 目标值 |
+| `chr` | character | 角色管理（含 reset 转发） |
+| `buff` | buff | Buff |
+| `dr` / `resmod` | resource/modifier | 资源修正 |
+| `rc` | resource/resource | 资源记录 HP/MP/护盾 |
+| `i` | inventory | 背包 |
+| `wp` / `setupWP` | weapon | 武器 |
+| `lv` | level | 等级 |
+| `neg` | negotiation | 交涉 |
+| `tl` | battle/timeline | 时间线 |
+| `bt` | battle/battle | 战斗行动 |
+| `tlsetup` / `TLsetup` | character | 角色创建 |
+| `help` | main | 帮助 |
+
+### CommandContext 约定
+
+- 业务模块通过 `ctx.send(text)` 添加回复，**不直接发送**
+- `main.py` 统一将 `ctx.reply_payloads` 转为 `event.plain_result()` / 图片
+- `ctx.group_id is not None` → 群聊；否则私聊（影响存储路径）
+
+### chr reset 转发
+
+- `.chr reset` → `command_dispatcher.dispatch("chr_reset", ctx)`
+- 处理器: `batch_command/character_reset.py` 的 `_reset_character_state`
+- 组合: rc reset + dr del all + buff del all
+- **重要**: batch 处理函数返回字符串，wrapper 必须 `ctx.send(result)`
+
+---
+
+## 数据存储（StorageBackend）
+
+路径根: `data/plugin_data/TimelineTRPG/`（通过 `StarTools.get_data_dir("TimelineTRPG")`）
+
+| 类型 | 路径 |
+|------|------|
+| 角色 | `User/{user_id}/characters.json` |
+| 武器 | `Weapon/{user_id}/weapons.json` |
+| 资源 | `Resource/{user_id}/resources.json` |
+| 战斗时间轴 | `BattleTimeline/Group\|Private/{conversation_id}/data.json` |
+| 背包重量 | `Inventory/Group\|Private/{conversation_id}/weights.json` |
+| 检定目标/交涉 | `Examination/target.json`, `negotiation.json`（全局） |
+
+**原则**: 持久化数据存 `data/`，不存插件目录内（防止更新覆盖）。
+
+---
+
+## 时间线与定时事件
+
+### current_time 计算
+
+- **不再持久化**到 battle json
+- 由 `TimelineCore.get_current_time(battle)` 实时计算
+- 定义: 所有「参与中」角色各自最新行动结束时间的**最小值**
+
+### 定时事件调度（infrastructure/scheduler.py）
+
+- `schedule_event()`: 添加 buff/dr/护盾等到 `scheduled_events`
+- `execute_scheduled_events()`: 战斗行动推进时检查到期
+- **必须使用** `_resolve_current_time(battle)` 获取当前时间（不可读 `battle["current_time"]`）
+- 到期判断: `current_time >= end_time`（达到或超过即触发）
+- 模式: `time_based`（持续时间 t）/ `count_based`（生效次数）
+
+### dr 资源修饰到期
+
+- 添加时: `modifier._schedule_modifier_event()` → `schedule_event(..., callback_path="trpg.service.resource.modifier.remove_expired_modifier")`
+- 到期回调: `remove_expired_modifier(user_id, modifier_id)` 按 `created_at` 匹配删除
+- 调度时需传 `is_group` 与执行时一致
+
+---
+
+## 回复模板
+
+- 位置: `trpg/infrastructure/config/replies.json`
+- 用法: `ReplyManager("module_name").render("key", **vars)`
+- 各 service 模块有独立 namespace（如 `battle`, `timeline`, `character_reset`）
+
+---
+
+## 游戏配置（game_config）
+
+- 文件: `trpg/infrastructure/config/game_config.json`
+- 单例: `game_config`（`GameConfig` 类）
+- 精度类型: `time`, `impact`, `percentage`, `attribute`, `resource`, `weight`, `success_rate`
+- 运行时修改: `.tl acc {精度}`
+
+---
+
+## 已知修复（2026-07）
+
+1. **dr 到期不删除**: scheduler 读 stale `current_time=0` → 改为 TimelineCore 实时计算 + `>=`
+2. **# 前缀**: 已从全局指令匹配移除
+3. **chr reset 无回复**: wrapper 未 send 转发结果 → 已修复；`reset_partial` 模板变量 `{success}`
+
+---
+
+## 开发约定
+
+- 业务模块不 import AstrBot API
+- 新增指令: 在 service 写 handler → main.py 注册路由 → 可选 HelpEntry
+- 跨层组合指令放 `batch_command/`，通过 `command_dispatcher` 注册
+- 使用 `ReplyManager` 而非硬编码中文（replies.json）
+- 异步网络请求用 aiohttp/httpx，不用 requests
+- 提交前可用 ruff 格式化
+- 插件调试: AstrBot WebUI → 插件管理 → 重载插件
+
+## 参考链接
+
+- AstrBot 插件开发: https://docs.astrbot.app/dev/star/plugin-new.html
+- 插件配置面板: https://docs.astrbot.app/dev/star/guides/plugin-config.html
+- AstrBot 仓库: https://github.com/AstrBotDevs/AstrBot
