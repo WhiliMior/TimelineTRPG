@@ -5,6 +5,7 @@
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
+from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
@@ -163,8 +164,6 @@ class ResourceRecordModule:
             return {"current_hp": 0, "current_mp": 0, "shields": []}
 
         # 使用CharacterReader获取最终属性（包含buff修正）
-        from ...infrastructure.character_reader import CharacterReader
-
         final_attributes = CharacterReader.get_character_final_attributes(user_id)
 
         if not final_attributes:
@@ -202,8 +201,6 @@ class ResourceRecordModule:
     ) -> tuple[float | None, float | None]:
         """获取角色的HP和MP最大值（使用最终属性，经过buff修正）"""
         # 使用CharacterReader获取最终属性（包含buff修正）
-        from ...infrastructure.character_reader import CharacterReader
-
         final_attributes = CharacterReader.get_character_final_attributes(user_id)
 
         if not final_attributes:
@@ -564,7 +561,7 @@ class ResourceRecordModule:
         elif value_type == "defense":
             try:
                 defense = float(raw.rstrip("dD"))
-                level = character_data.get("等级", 1)
+                level = CharacterReader.effective_level(character_data)
 
                 if range_val.startswith("-"):
                     return defense / (defense + (level * 10))

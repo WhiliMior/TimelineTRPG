@@ -18,6 +18,7 @@ from datetime import datetime
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.attribute_resolver import AttributeResolver
+from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
 
@@ -140,7 +141,7 @@ class BuffModule:
 
         command = ctx.args[0].lower()
 
-        if command == "add" and len(ctx.args) >= 5:
+        if command == "add" and len(ctx.args) >= 4:
             # 支持两种格式，类型和数值位置可自由调换：
             # 1. 标准格式: .buff add {名称} {属性} {类型} {数值} [持续时间]
             #    例: .buff add 力量Buff 力量 直接加算 5 10
@@ -198,7 +199,7 @@ class BuffModule:
                     ctx.send(response)
                     return True
 
-                level = character.get("data", {}).get("等级", 1)
+                level = CharacterReader.effective_level(character.get("data"))
                 dice_count_str = value_str[:-1]  # 去掉 d
                 dice_count = int(dice_count_str)
                 # 效果% = 数值/(等级*10)

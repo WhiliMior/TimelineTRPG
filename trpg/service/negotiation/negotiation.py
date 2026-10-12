@@ -162,8 +162,7 @@ class NegotiationModule:
             return self.reply.render("negotiation_attribute_not_found")
 
         # 获取角色的等级
-        character_data = character.get("data", {})
-        level = character_data.get("等级", 1)
+        level = CharacterReader.effective_level(character.get("data"))
 
         # 获取目标
         target = self._get_negotiation_target(conversation_id, session_type)
@@ -216,6 +215,8 @@ class NegotiationModule:
         """
         if target_intelligence <= 0:
             return 0.0
+        level = max(level, 1)
+        target_level = max(target_level, 1)
 
         success_rate = (
             (rp_grade + (negotiation_value / level)) / target_intelligence * 25

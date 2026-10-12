@@ -7,6 +7,7 @@ from datetime import datetime
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
+from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
 
 
@@ -258,7 +259,7 @@ class ResourceModifierModule:
             # 防御值: 需要根据角色等级和范围计算
             try:
                 defense = float(raw.rstrip("dD"))
-                level = character_data.get("等级", 1)
+                level = CharacterReader.effective_level(character_data)
 
                 if range_val.startswith("-"):
                     # 减伤效果: 防御/(防御+(等级*10))
