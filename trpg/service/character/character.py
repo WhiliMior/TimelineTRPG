@@ -74,6 +74,9 @@ class CharacterModule:
         if not args_str:
             return {}
 
+        # 手机输入法常打出全角冒号/逗号
+        args_str = args_str.replace("：", ":").replace("，", ",")
+
         # 按逗号分割属性
         attribute_list = args_str.split(",")
 
