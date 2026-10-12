@@ -8,6 +8,7 @@
 from typing import TYPE_CHECKING
 
 from ...infrastructure.config.game_config import game_config
+from ...infrastructure.storage import StorageBackend
 
 if TYPE_CHECKING:
     from ..battle import BattleModule
@@ -167,8 +168,13 @@ class TimelineCore:
         return 0.0
 
 
-# 全局实例会在 BattleModule 初始化时创建
-timeline_core: TimelineCore | None = None
+def get_conversation_current_time(conversation_id: str, is_group: bool) -> float | None:
+    """会话中进行中战斗的当前时间点；没有进行中的战斗时返回 None"""
+    data = StorageBackend.load_battle_timeline(conversation_id, is_group)
+    battle = StorageBackend.get_active_battle(data)
+    if battle is None:
+        return None
+    return TimelineCore().get_current_time(battle)
 
 
 def init_timeline_core(battle_module: "BattleModule") -> TimelineCore:

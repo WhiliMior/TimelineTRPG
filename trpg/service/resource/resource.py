@@ -8,7 +8,9 @@ from ...adapter.message import ReplyManager
 from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ..battle.core import get_conversation_current_time
 
 
 class ResourceRecordModule:
@@ -915,18 +917,20 @@ class ResourceRecordModule:
         coverage_type: str,
         shield_value: float,
         is_group: bool = True,
-    ):
+    ) -> dict | None:
         """
         调度护盾到期事件
+
+        Returns:
+            dict | None: 调度的事件；会话中没有进行中的战斗时返回 None（不会自动到期）
         """
-        # 使用 infrastructure scheduler 避免循环引用
-        from ...infrastructure.scheduler import schedule_event
+        current_time = get_conversation_current_time(conversation_id, is_group)
+        if current_time is None:
+            return None
 
-        # 获取角色名
         character = await self._get_active_character(user_id)
-
         if not character:
-            return
+            return None
         character_name = character.get("name", "未知角色")
 
         # 确定模式
@@ -945,8 +949,7 @@ class ResourceRecordModule:
         action_desc = f"{character_name} {coverage_type}护盾 {shield_value}"
         callback_msg = f"{character_name} {coverage_type}护盾 {shield_value} 到期"
 
-        # 调用 scheduler 调度事件
-        schedule_event(
+        return await schedule_event(
             conversation_id=conversation_id,
             user_id=user_id,
             character_name=character_name,
@@ -955,6 +958,7 @@ class ResourceRecordModule:
             callback_path="trpg.service.resource.resource.remove_expired_shield",
             callback_args={"user_id": user_id, "shield_created_at": shield_created_at},
             callback_message=callback_msg,
+            current_time=current_time,
             mode=mode,
             event_type="shield",
             is_group=is_group,
@@ -963,40 +967,18 @@ class ResourceRecordModule:
 
 async def remove_expired_shield(user_id: str, shield_created_at: str) -> bool:
     """
-    模块级函数，用于移除到期的护盾
-    由战斗系统在定时事件触发时调用
+    模块级函数，用于移除到期的护盾（定时事件到期回调）
 
-    infrastructure 层会统一处理事件循环
+    按 created_at 精确匹配；在该用户的所有角色中查找。
     """
-    from ..character.character import character_module
-
-    character = await character_module.get_active_character(user_id)
-    if not character:
-        return False
-
-    resources = character.get("resources", {})
-    shields = resources.get("shields", [])
-
-    if not shields:
-        return False
-
-    # 查找并移除指定 created_at 的护盾
-    original_count = len(shields)
-    shields = [s for s in shields if s.get("created_at") != shield_created_at]
-
-    if len(shields) < original_count:
-        resources["shields"] = shields
-
-        # 保存角色数据
-        characters = await character_module._get_user_characters(user_id)
-        for i, char in enumerate(characters):
-            if char.get("name") == character.get("name"):
-                characters[i] = character
-                break
-
-        await character_module._save_characters(user_id, characters)
-        return True
-
+    async with StorageBackend.edit_characters(user_id) as characters:
+        for character in characters:
+            resources = character.get("resources") or {}
+            shields = resources.get("shields") or []
+            kept = [s for s in shields if s.get("created_at") != shield_created_at]
+            if len(kept) < len(shields):
+                resources["shields"] = kept
+                return True
     return False
 
 

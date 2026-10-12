@@ -318,6 +318,15 @@ class StorageBackend:
         path = cls._battle_timeline_path(conversation_id, is_group)
         return cls._write_json(path, data)
 
+    @staticmethod
+    def get_active_battle(data: dict) -> dict | None:
+        """从战斗时间轴文件数据中取出当前活跃的战斗（就地引用），没有则返回 None"""
+        battle_id = data.get("active_battle_id")
+        battle = (data.get("battle_list") or {}).get(battle_id) if battle_id else None
+        if not battle or not battle.get("name"):
+            return None
+        return battle
+
     @classmethod
     @asynccontextmanager
     async def edit_battle_timeline(

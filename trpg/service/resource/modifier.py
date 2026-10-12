@@ -9,6 +9,9 @@ from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import schedule_event
+from ...infrastructure.storage import StorageBackend
+from ..battle.core import get_conversation_current_time
 
 
 class ResourceModifierModule:
@@ -354,7 +357,7 @@ class ResourceModifierModule:
         if duration and duration != "0t" and duration != "0":
             character_name = character.get("name", "未知角色")
             # 传递原始字符串用于显示
-            self._schedule_modifier_event(
+            await self._schedule_modifier_event(
                 conversation_id,
                 user_id,
                 created_at,
@@ -472,7 +475,7 @@ class ResourceModifierModule:
 
         return "\n".join(lines)
 
-    def _schedule_modifier_event(
+    async def _schedule_modifier_event(
         self,
         conversation_id: str,
         user_id: str,
@@ -483,12 +486,16 @@ class ResourceModifierModule:
         value: str,
         character_name: str = "未知角色",
         is_group: bool = True,
-    ):
+    ) -> dict | None:
         """
         调度资源修饰到期事件
+
+        Returns:
+            dict | None: 调度的事件；会话中没有进行中的战斗时返回 None（不会自动到期）
         """
-        # 使用 infrastructure scheduler 避免循环引用
-        from ...infrastructure.scheduler import schedule_event
+        current_time = get_conversation_current_time(conversation_id, is_group)
+        if current_time is None:
+            return None
 
         # 确定模式
         mode = (
@@ -506,8 +513,7 @@ class ResourceModifierModule:
         action_desc = f"{character_name} {source} {range_val} {value}"
         callback_msg = f"{character_name} {source} {range_val} {value} 到期"
 
-        # 调用 scheduler 调度事件
-        schedule_event(
+        return await schedule_event(
             conversation_id=conversation_id,
             user_id=user_id,
             character_name=character_name,
@@ -516,6 +522,7 @@ class ResourceModifierModule:
             callback_path="trpg.service.resource.modifier.remove_expired_modifier",
             callback_args={"user_id": user_id, "modifier_id": modifier_id},
             callback_message=callback_msg,
+            current_time=current_time,
             mode=mode,
             event_type="modifier",
             is_group=is_group,
@@ -524,39 +531,17 @@ class ResourceModifierModule:
 
 async def remove_expired_modifier(user_id: str, modifier_id: str) -> bool:
     """
-    模块级函数，用于移除过期的资源修饰
-    由战斗系统在定时事件触发时调用
+    模块级函数，用于移除过期的资源修饰（定时事件到期回调）
 
-    infrastructure 层会统一处理事件循环
+    modifier_id 为修饰的 created_at；在该用户的所有角色中查找。
     """
-    from ..character.character import character_module
-
-    character = await character_module.get_active_character(user_id)
-    if not character:
-        return False
-
-    modifiers = character.get("resource_modifiers", [])
-
-    if not modifiers:
-        return False
-
-    # 查找并移除指定ID的修饰
-    original_count = len(modifiers)
-    modifiers = [m for m in modifiers if m.get("created_at") != modifier_id]
-
-    if len(modifiers) < original_count:
-        character["resource_modifiers"] = modifiers
-
-        # 保存角色数据
-        characters = await character_module._get_user_characters(user_id)
-        for i, char in enumerate(characters):
-            if char.get("name") == character.get("name"):
-                characters[i] = character
-                break
-
-        await character_module._save_characters(user_id, characters)
-        return True
-
+    async with StorageBackend.edit_characters(user_id) as characters:
+        for character in characters:
+            modifiers = character.get("resource_modifiers") or []
+            kept = [m for m in modifiers if m.get("created_at") != modifier_id]
+            if len(kept) < len(modifiers):
+                character["resource_modifiers"] = kept
+                return True
     return False
 
 

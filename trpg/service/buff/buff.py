@@ -20,7 +20,9 @@ from ...adapter.message import ReplyManager
 from ...infrastructure.attribute_resolver import AttributeResolver
 from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ..battle.core import get_conversation_current_time
 
 # Buff类型常量
 VALID_BUFF_TYPES = {"直接加算", "直接乘算", "最终加算", "最终乘算"}
@@ -396,34 +398,34 @@ class BuffModule:
                 f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
             )
 
-            # 直接调用 scheduler 调度事件
-            from ...infrastructure.scheduler import schedule_event
-
             duration_value = (
                 float(duration[:-1])
                 if (isinstance(duration, str) and duration.endswith("t"))
                 else float(duration)
             )
 
-            schedule_event(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                character_name=character_name,
-                action_description=action_desc,
-                duration_or_count=duration_value,
-                callback_path="trpg.service.buff.buff.remove_expired_buff",
-                callback_args={
-                    "user_id": user_id,
-                    "created_at": created_at,
-                    "attribute": resolved_attribute,
-                    "buff_type": buff_type,
-                    "buff_value": value,
-                },
-                callback_message=callback_message,
-                mode=mode,
-                event_type="buff",
-                is_group=is_group,
-            )
+            current_time = get_conversation_current_time(conversation_id, is_group)
+            if current_time is not None:
+                await schedule_event(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    character_name=character_name,
+                    action_description=action_desc,
+                    duration_or_count=duration_value,
+                    callback_path="trpg.service.buff.buff.remove_expired_buff",
+                    callback_args={
+                        "user_id": user_id,
+                        "created_at": created_at,
+                        "attribute": resolved_attribute,
+                        "buff_type": buff_type,
+                        "buff_value": value,
+                    },
+                    callback_message=callback_message,
+                    current_time=current_time,
+                    mode=mode,
+                    event_type="buff",
+                    is_group=is_group,
+                )
 
         duration_str = "永久" if duration is None else str(duration)
         value_display = format_buff_value(value, buff_type)
@@ -590,45 +592,18 @@ async def remove_expired_buff(
     buff_value: float = None,
 ) -> bool:
     """
-    模块级函数，用于移除过期的buff
-    由战斗系统在定时事件触发时调用
+    模块级函数，用于移除过期的buff（定时事件到期回调）
 
-    直接使用 created_at 精确匹配要删除的buff
-    infrastructure 层会统一处理事件循环
+    按 created_at 精确匹配；在该用户的所有角色中查找，
+    玩家中途切换了激活角色也能正确移除。
     """
-    from ..character.character import character_module
-
-    # 获取角色模块
-    char_module = character_module
-
-    # 获取当前激活的角色
-    active_char = await char_module.get_active_character(user_id)
-    if not active_char:
-        return False
-
-    buffs = active_char.get("buffs", [])
-
-    if not buffs:
-        return False
-
-    # 查找并移除匹配的buff（使用唯一标识：created_at）
-    original_count = len(buffs)
-    buffs = [b for b in buffs if b.get("created_at") != created_at]
-
-    if len(buffs) < original_count:
-        # 更新并保存角色数据
-        active_char["buffs"] = buffs
-
-        # 保存角色数据
-        characters = await char_module._get_user_characters(user_id)
-        for i, char in enumerate(characters):
-            if char.get("name") == active_char.get("name"):
-                characters[i] = active_char
-                break
-        await char_module._save_characters(user_id, characters)
-
-        return True
-
+    async with StorageBackend.edit_characters(user_id) as characters:
+        for character in characters:
+            buffs = character.get("buffs") or []
+            kept = [b for b in buffs if b.get("created_at") != created_at]
+            if len(kept) < len(buffs):
+                character["buffs"] = kept
+                return True
     return False
 
 

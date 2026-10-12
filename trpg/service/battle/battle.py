@@ -19,10 +19,14 @@ from ...infrastructure.attribute_resolver import AttributeResolver
 from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import (
+    decrement_count_based_events,
+    execute_scheduled_events,
+    restore_count_based_events,
+)
 from ...infrastructure.storage import StorageBackend
 from ...infrastructure.timeline_formatter import timeline_formatter
-
-from .core import init_timeline_core, timeline_core
+from .core import init_timeline_core
 
 
 class BattleModule:
@@ -659,7 +663,7 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        battle, executed = self._process_scheduled_events(
+        battle, executed = await self._process_scheduled_events(
             storage_key, user_id, character_name, is_group, decrement=True
         )
 
@@ -671,7 +675,7 @@ class BattleModule:
 
         return timeline_result
 
-    def _process_scheduled_events(
+    async def _process_scheduled_events(
         self,
         storage_key: str,
         user_id: str,
@@ -685,31 +689,28 @@ class BattleModule:
         调度器会直接读写存储文件，因此结算完成后必须重新读取，
         否则显示的定时事件剩余次数/到期列表会是旧数据。
 
+        Args:
+            decrement: 是否把该角色次数模式事件的剩余次数减 1（新增行动时）
+
         Returns:
             (最新的战斗数据, 到期事件消息列表)
         """
         executed: list[str] = []
         if decrement:
             executed.extend(
-                self._decrement_count_based_events(
+                await decrement_count_based_events(
                     storage_key, user_id, character_name, is_group
                 )
             )
-        executed.extend(self.execute_scheduled_events(storage_key, user_id, is_group))
-        return self._get_battle(storage_key, is_group), [m for m in executed if m]
-
-    def _decrement_count_based_events(
-        self, storage_key: str, user_id: str, character_name: str, is_group: bool
-    ) -> list[str]:
-        """
-        递减指定用户当前角色的计数模式事件的剩余次数
-        包括buff、护盾、资源修饰事件（委托给调度器，调度器每次都会保存）
-        """
-        from ...infrastructure.scheduler import decrement_count_based_events
-
-        return decrement_count_based_events(
-            storage_key, user_id, character_name, is_group
+        current_time = self._timeline_core.get_current_time(
+            self._get_battle(storage_key, is_group)
         )
+        executed.extend(
+            await execute_scheduled_events(
+                storage_key, current_time, user_id=user_id, is_group=is_group
+            )
+        )
+        return self._get_battle(storage_key, is_group), executed
 
     async def _insert_action(
         self,
@@ -820,7 +821,7 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        battle, executed = self._process_scheduled_events(
+        battle, executed = await self._process_scheduled_events(
             storage_key, user_id, character_name, is_group, decrement=False
         )
 
@@ -884,10 +885,9 @@ class BattleModule:
         # 先保存撤销结果，再结算定时事件；顺序反过来会用旧数据覆盖调度器的修改
         self._save_battle(storage_key, battle, is_group)
 
-        # 恢复被撤销的计数模式事件（恢复1次）
-        self._restore_count_based_events(storage_key, user_id, character_name, is_group)
+        await restore_count_based_events(storage_key, user_id, character_name, is_group)
 
-        battle, executed = self._process_scheduled_events(
+        battle, executed = await self._process_scheduled_events(
             storage_key, user_id, character_name, is_group, decrement=False
         )
 
@@ -901,38 +901,6 @@ class BattleModule:
             result += event_msgs
         result += "\n" + timeline_result
         return result
-
-    def _restore_count_based_events(
-        self, storage_key: str, user_id: str, character_name: str, is_group: bool
-    ):
-        """
-        恢复指定用户当前角色的计数模式事件的剩余次数（在撤销行动时调用）
-
-        Args:
-            storage_key: 会话ID
-            user_id: 用户ID
-            character_name: 角色名
-            is_group: 是否为群聊
-        """
-        battle = self._get_battle(storage_key, is_group)
-        if not battle.get("name"):
-            return
-
-        scheduled_events = battle.get("scheduled_events", [])
-
-        for event in scheduled_events:
-            # 检查是否为该用户和角色的计数模式事件
-            if (
-                event.get("user_id") == user_id
-                and event.get("character_name") == character_name
-                and event.get("mode") == "count_based"
-                and event.get("remaining_count") is not None
-            ):
-                # 恢复剩余次数（增加1）
-                event["remaining_count"] += 1
-
-        # 保存数据
-        self._save_battle(storage_key, battle, is_group)
 
     def _format_timeline_display(
         self, battle: dict, attribute_label: str = "属性", extra_info: dict = None
@@ -1369,7 +1337,7 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        battle, executed = self._process_scheduled_events(
+        battle, executed = await self._process_scheduled_events(
             storage_key, user_id, character_name, is_group, decrement=True
         )
 
@@ -1384,52 +1352,6 @@ class BattleModule:
             return timeline_result + event_msgs
 
         return timeline_result
-
-    def schedule_buff_event(
-        self,
-        conversation_id: str,
-        user_id: str,
-        character_name: str,
-        action_description: str,
-        duration_or_count: float,
-        callback_path: str,
-        callback_args: dict,
-        callback_message: str,
-        mode: str = "time_based",
-        is_group: bool = True,
-    ) -> bool:
-        """
-        调度一个定时事件
-
-        委托给 infrastructure.scheduler_module 处理
-        """
-        from ...infrastructure.scheduler import schedule_event
-
-        return schedule_event(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            character_name=character_name,
-            action_description=action_description,
-            duration_or_count=duration_or_count,
-            callback_path=callback_path,
-            callback_args=callback_args,
-            callback_message=callback_message,
-            mode=mode,
-            event_type="buff",
-            is_group=is_group,
-        )
-
-    def execute_scheduled_events(
-        self, conversation_id: str, user_id: str = None, is_group: bool = True
-    ) -> list[str]:
-        """
-        执行到期的定时事件
-
-        委托给 infrastructure.scheduler_module 处理
-        """
-        from ...infrastructure.scheduler import execute_scheduled_events
-
-        return execute_scheduled_events(conversation_id, user_id, is_group)
 
 
 battle_module = BattleModule()
