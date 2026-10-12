@@ -11,6 +11,15 @@ from ...adapter.message import ReplyManager
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.text_style import (
+    DIVIDER,
+    clip_lines,
+    item,
+    kv,
+    signed,
+    wrap,
+)
+from ...infrastructure.text_style import num as _num
 
 
 class InventoryModule:
@@ -27,7 +36,6 @@ class InventoryModule:
 
     def __init__(self):
         self.reply = ReplyManager("inventory")
-        self.system_reply = ReplyManager("system")
 
     @property
     def help_entry(self) -> HelpEntry:
@@ -36,11 +44,11 @@ class InventoryModule:
             usage="[cash|物品名|del|all] [参数]",
             summary="背包管理",
             detail=(
-                "- 显示背包内容和状态\n"
-                "cash +/-{数值} (描述) - 记录现金变动\n"
-                "cash - 显示当前现金和消费记录\n"
-                "{物品名} +/-{数量} (单个重量) - 记录物品变动\n"
-                "del {序号}/all - 删除物品或清空背包"
+                ".i：查看背包和负重\n"
+                ".i cash +/-数值 (描述)：现金变动\n"
+                ".i cash：现金和消费记录\n"
+                ".i 物品 +/-数量 (单重)：物品变动\n"
+                ".i del 序号/all：删除物品"
             ),
         )
 
@@ -187,9 +195,7 @@ class InventoryModule:
             ctx.send(result)
             return True
 
-        # 无效命令
-        response = self.system_reply.render("command_not_found", command=ctx.command)
-        ctx.send(response)
+        ctx.send(self.reply.render("unknown_input", input=raw_args_for_parse))
         return True
 
     async def _get_active_character(self, user_id: str) -> dict | None:
@@ -288,25 +294,31 @@ class InventoryModule:
         if total_weight is None:
             total_weight = 0.0
 
-        lines = [self.reply.render("inventory_header")]
+        lines = [
+            self.reply.render(
+                "inventory_header", name=character.get("name", ""), count=len(items)
+            )
+        ]
 
         if items:
-            for i, item in enumerate(items):
-                name = item.get("name", "未知")
-                quantity = item.get("quantity", 1)
-                weight = item.get("weight", 0)
+            entries = []
+            for i, entry in enumerate(items):
+                text = f"{entry.get('name', '未知')}×{entry.get('quantity', 1)}"
+                weight = entry.get("weight", 0)
                 if weight > 0:
-                    lines.append(f"[{i + 1}] {name} x{quantity} (负重:{weight})")
-                else:
-                    lines.append(f"[{i + 1}] {name} x{quantity}")
+                    text += f" 负重{_num(weight)}"
+                entries.append(item(i + 1, text))
+            lines.extend(
+                clip_lines(entries, more_hint=self.reply.render("list_more_hint"))
+            )
         else:
             lines.append(self.reply.render("empty_inventory"))
 
-        # 总是显示总负重和现金
-        lines.append(f"\n总负重: {total_weight}/{max_weight}")
-        lines.append(f"现金: {cash}")
+        lines.append(DIVIDER)
+        lines.append(kv("负重", f"{_num(total_weight)}/{_num(max_weight)}"))
+        lines.append(kv("现金", _num(cash)))
 
-        return "\n".join(lines)
+        return wrap("\n".join(lines))
 
     async def _show_cash_records(self, user_id: str) -> str:
         """显示现金和消费记录"""
@@ -321,21 +333,23 @@ class InventoryModule:
         cash = inventory_data.get("cash", 0)
         cash_records = inventory_data.get("cash_records", [])
 
-        lines = [f"当前现金: {cash}"]
+        lines = [self.reply.render("cash_balance", balance=_num(cash))]
 
         if cash_records:
-            lines.append("\n消费记录:")
-            # 显示最近的10条记录
+            lines.append(self.reply.render("cash_records_title"))
             for record in cash_records[-10:]:
-                amount = record.get("amount", 0)
-                desc = record.get("description", "")
-                time_str = record.get("time", "")[:19]  # 只显示日期时间
-                if amount >= 0:
-                    lines.append(f"+{amount} {desc} ({time_str})")
-                else:
-                    lines.append(f"{amount} {desc} ({time_str})")
+                # ISO 时间只保留「月-日 时:分」
+                time_str = record.get("time", "")[5:16].replace("T", " ")
+                parts = [
+                    signed(_num(record.get("amount", 0))),
+                    record.get("description", ""),
+                    time_str,
+                ]
+                lines.append(" ".join(p for p in parts if p))
+        else:
+            lines.append(self.reply.render("no_cash_records"))
 
-        return "\n".join(lines)
+        return wrap("\n".join(lines))
 
     async def _update_cash(
         self, user_id: str, amount: float, description: str = ""
@@ -366,20 +380,13 @@ class InventoryModule:
 
         # 保存（不存储 cash 字段，只存储 cash_records）
         if await self._save_inventory_data(user_id, inventory_data):
-            if amount >= 0:
-                return self.reply.render(
-                    "cash_added",
-                    value=f"+{amount}",
-                    old_cash=old_cash,
-                    new_cash=new_cash,
-                )
-            else:
-                return self.reply.render(
-                    "cash_removed",
-                    value=str(amount),
-                    old_cash=old_cash,
-                    new_cash=new_cash,
-                )
+            return self.reply.render(
+                "cash_changed",
+                value=signed(_num(amount)),
+                old_cash=_num(old_cash),
+                new_cash=_num(new_cash),
+                description=f" {description}" if description else "",
+            )
         else:
             return self.reply.render("save_failed")
 
@@ -426,18 +433,24 @@ class InventoryModule:
 
         # 查找物品
         found = False
-        for item in items:
-            if item.get("name") == item_name:
-                new_quantity = item.get("quantity", 1) + quantity
+        remaining = max(quantity, 0)
+        for entry in items:
+            if entry.get("name") == item_name:
+                new_quantity = entry.get("quantity", 1) + quantity
                 if new_quantity <= 0:
                     # 数量为0或负数，移除物品
-                    items.remove(item)
+                    items.remove(entry)
+                    remaining = 0
                 else:
-                    item["quantity"] = new_quantity
+                    entry["quantity"] = new_quantity
+                    remaining = new_quantity
                     if weight_value is not None:
-                        item["weight"] = weight_value
+                        entry["weight"] = weight_value
                 found = True
                 break
+
+        if is_removal and not found:
+            return self.reply.render("item_not_found", name=item_name)
 
         if not found and quantity > 0:
             # 新增物品
@@ -448,22 +461,18 @@ class InventoryModule:
 
         inventory_data["items"] = items
 
-        if await self._save_inventory_data(user_id, inventory_data):
-            # 返回正确的消息
-            if is_removal:
-                return self.reply.render(
-                    "item_removed", name=item_name, quantity=abs(quantity)
-                )
-            else:
-                if weight_auto_filled:
-                    return self.reply.render(
-                        "item_weight_auto", name=item_name, weight=weight_value
-                    )
-                return self.reply.render(
-                    "item_added", name=item_name, quantity=abs(quantity)
-                )
-        else:
+        if not await self._save_inventory_data(user_id, inventory_data):
             return self.reply.render("save_failed")
+
+        key = "item_removed" if is_removal else "item_added"
+        result = self.reply.render(
+            key, name=item_name, quantity=abs(quantity), remaining=remaining
+        )
+        if weight_auto_filled and not is_removal:
+            result += "\n" + self.reply.render(
+                "item_weight_auto", weight=_num(weight_value)
+            )
+        return result
 
     async def _del_item(self, user_id: str, index: int) -> str:
         """删除指定索引的物品"""

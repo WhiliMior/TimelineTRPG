@@ -11,6 +11,8 @@ from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.text_style import clip_lines, item, wrap
+from ...infrastructure.timeline_formatter import describe_expiry
 from ..battle.core import get_conversation_current_time
 
 
@@ -55,10 +57,11 @@ class ResourceModifierModule:
             usage="[add|del] [参数]",
             summary="资源修正管理",
             detail=(
-                "- 查看资源修饰列表\n"
-                "add {来源} {范围} {数值} (类型) (持续时间) - 添加资源修饰\n"
-                "del {序号}/all - 移除资源修饰\n"
-                "{范围} - 显示指定范围的资源修饰"
+                ".dr：资源修正列表\n"
+                ".dr add 来源 范围 数值 (类型) (持续)\n"
+                "例：.dr add 铠甲 hp 50% 物理 3t\n"
+                ".dr del 序号/all：移除\n"
+                ".dr 范围：只看该范围"
             ),
         )
 
@@ -154,9 +157,10 @@ class ResourceModifierModule:
             ctx.send(result)
             return True
 
-        # 无效命令，显示列表
-        result = await self._list_modifiers(user_id)
-        ctx.send(result)
+        if command == "add":
+            ctx.send(self.reply.render("add_usage"))
+        else:
+            ctx.send(self.reply.render("unknown_subcommand", subcommand=ctx.args[0]))
         return True
 
     async def _get_active_character(self, user_id: str) -> dict | None:
@@ -353,10 +357,11 @@ class ResourceModifierModule:
         modifiers.append(modifier)
 
         # 如果有持续时间，调度资源修饰到期事件
+        expiry = ""
         if duration and duration != "0t" and duration != "0":
             character_name = character.get("name", "未知角色")
             # 传递原始字符串用于显示
-            await self._schedule_modifier_event(
+            event = await self._schedule_modifier_event(
                 conversation_id,
                 user_id,
                 created_at,
@@ -367,6 +372,7 @@ class ResourceModifierModule:
                 character_name,
                 is_group,
             )
+            expiry = "\n" + describe_expiry(event)
 
         if await self._save_modifiers(user_id, modifiers):
             # 格式化数值显示（原始值和换算后）
@@ -374,8 +380,14 @@ class ResourceModifierModule:
             value_display = self._format_modifier_display(
                 value, character_data, normalized_range
             )
-            return self.reply.render(
-                "modifier_added", source=source, range=range_input, value=value_display
+            return (
+                self.reply.render(
+                    "modifier_added",
+                    source=source,
+                    range=normalized_range,
+                    value=value_display,
+                )
+                + expiry
             )
         else:
             return self.reply.render("save_failed")
@@ -449,9 +461,7 @@ class ResourceModifierModule:
         # 获取角色数据用于计算防御值
         character_data = character.get("data", {})
 
-        # 构建列表
-        lines = [self.reply.render("modifier_list_header")]
-
+        lines = []
         for i, modifier in enumerate(modifiers):
             source = modifier.get("source", "")
             range_val = modifier.get("range", "")
@@ -465,14 +475,18 @@ class ResourceModifierModule:
             )
 
             # 省略默认值的显示
-            type_display = f" [{type_val}]" if type_val and type_val != "通用" else ""
-            duration_display = f" 持续{duration}" if duration else ""
+            text = f"{source} {range_val} {value_display}"
+            if type_val and type_val not in ("通用", "所有"):
+                text += f" {type_val}"
+            if duration:
+                text += (
+                    f" 持续{duration}" if duration.endswith("t") else f" {duration}次"
+                )
+            lines.append(item(i + 1, text))
 
-            lines.append(
-                f"[{i + 1}] {source} {range_val} {value_display}{type_display}{duration_display}"
-            )
-
-        return "\n".join(lines)
+        lines = clip_lines(lines, more_hint=self.reply.render("list_more_hint"))
+        header = self.reply.render("modifier_list_header", count=len(modifiers))
+        return wrap("\n".join([header, *lines]))
 
     async def _schedule_modifier_event(
         self,
@@ -510,7 +524,7 @@ class ResourceModifierModule:
 
         # 构建描述
         action_desc = f"{character_name} {source} {range_val} {value}"
-        callback_msg = f"{character_name} {source} {range_val} {value} 到期"
+        callback_msg = action_desc
 
         return await schedule_event(
             conversation_id=conversation_id,

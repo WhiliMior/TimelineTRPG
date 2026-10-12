@@ -7,6 +7,8 @@
 - 返回标准属性名供 CharacterReader 查询使用
 """
 
+from .suggestion import closest
+
 # 标准属性列表（按字母顺序排列）
 STANDARD_ATTRIBUTES: list[str] = [
     "体质",
@@ -186,6 +188,13 @@ class AttributeResolver:
 
         input_attribute = input_attribute.strip()
         return input_attribute in _VALID_INPUTS
+
+    @staticmethod
+    def suggest(input_attribute: str) -> str | None:
+        """输入不是合法属性时，返回最接近的合法写法（用于「你是不是想输入」提示）"""
+        if not input_attribute or AttributeResolver.is_valid(input_attribute):
+            return None
+        return closest(input_attribute.strip(), _VALID_INPUTS)
 
     @staticmethod
     def get_standard_attributes() -> list[str]:

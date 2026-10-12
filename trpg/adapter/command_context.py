@@ -8,6 +8,7 @@
 import logging
 from dataclasses import dataclass, field
 
+from ..infrastructure.text_style import wrap
 from .message import ReplyPayload
 
 # 创建 adapter 层专用的 logger
@@ -71,6 +72,8 @@ class CommandContext:
         if metadata is None:
             metadata = {}
 
+        # 兜底：任何回复都按手机屏宽换行，已排好版的文本不受影响
+        text = wrap(str(text))
         payload = ReplyPayload(text=text, metadata=metadata)
         self.reply_payloads.append(payload)
 
