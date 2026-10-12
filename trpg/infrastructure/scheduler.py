@@ -44,6 +44,18 @@ def _resolve_current_time(battle: dict) -> float:
         return battle.get("current_time", 0)
 
 
+# 本模块位于 <插件包>.trpg.infrastructure.scheduler，
+# AstrBot 以 data.plugins.<插件目录> 的形式加载插件，"trpg" 并不是顶层包
+_TRPG_PACKAGE = __name__.rsplit(".", 2)[0]
+
+
+def _resolve_module_path(module_path: str) -> str:
+    """把持久化的 "trpg.xxx" 回调路径映射到实际加载的包路径"""
+    if module_path == "trpg" or module_path.startswith("trpg."):
+        return _TRPG_PACKAGE + module_path[len("trpg") :]
+    return module_path
+
+
 def _execute_callback(callback_path: str, callback_args: dict):
     """
     执行回调函数（统一处理异步事件循环）
@@ -53,7 +65,6 @@ def _execute_callback(callback_path: str, callback_args: dict):
         callback_args: 回调函数参数
     """
     import importlib
-    import sys
 
     # 解析模块路径和函数名
     parts = callback_path.rsplit(".", 1)
@@ -62,12 +73,9 @@ def _execute_callback(callback_path: str, callback_args: dict):
 
     module_path, function_name = parts
 
-    # 首先尝试直接导入模块路径
-    full_module_path = module_path
-
     # 使用 importlib 动态导入模块和函数
     try:
-        module = importlib.import_module(full_module_path)
+        module = importlib.import_module(_resolve_module_path(module_path))
         callback_func = getattr(module, function_name)
 
         # 检查是否为协程函数
