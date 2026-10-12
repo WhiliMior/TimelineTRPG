@@ -94,6 +94,12 @@ class ReplyManager:
             raise ValueError(f"配置文件格式错误: {config_path} - {e}")
 
     @classmethod
+    def clear_cache(cls):
+        """清空模板缓存，下次使用时重新加载"""
+        cls._config_loaded = False
+        cls._templates = {}
+
+    @classmethod
     def reload_config(cls):
         """重新加载配置文件"""
         cls._config_loaded = False

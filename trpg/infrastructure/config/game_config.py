@@ -1,57 +1,130 @@
 """
 游戏配置管理模块 - 统一管理游戏数字精度配置
 迁移自老项目 Game/game_config.json
+
+配置来源（优先级从高到低）：
+1. AstrBot 插件配置面板（_conf_schema.json 中的 precision，由 main.py 注入）
+2. 数据目录下的 config/game_config.json（未注入面板配置时，.tl acc 写入此处）
+3. 插件目录内置的 game_config.json（只读默认值，插件更新会覆盖）
 """
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger("TimelineTRPG.config")
+
+PRECISION_TYPES = (
+    "time",
+    "impact",
+    "percentage",
+    "attribute",
+    "resource",
+    "weight",
+    "success_rate",
+)
+MAX_PRECISION = 5
+
+_BUNDLED_PATH = Path(__file__).parent / "game_config.json"
+_CONFIG_NAME = "game_config"
+_FALLBACK_PRECISION = {
+    "time": 2,
+    "impact": 0,
+    "percentage": 1,
+    "attribute": 0,
+    "resource": 1,
+    "weight": 2,
+    "success_rate": 1,
+}
+
+
+def _valid_precision(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if 0 <= value <= MAX_PRECISION else None
+
+
+def _load_bundled_precision() -> dict:
+    precision = dict(_FALLBACK_PRECISION)
+    try:
+        with open(_BUNDLED_PATH, encoding="utf-8") as f:
+            bundled = json.load(f).get("timeline_precision", {})
+        precision.update(
+            {k: v for k, v in bundled.items() if _valid_precision(v) is not None}
+        )
+    except (OSError, ValueError, AttributeError):
+        logger.warning("内置精度配置读取失败，使用默认值: %s", _BUNDLED_PATH)
+    return precision
 
 
 class GameConfig:
     """游戏配置管理类"""
 
     _instance = None
-    _config = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance.reset()
         return cls._instance
 
-    def __init__(self):
-        if self._config is None:
-            self._load_config()
+    def reset(self) -> None:
+        """恢复为内置默认值并解除面板配置绑定（插件卸载/热重载时调用）"""
+        self._config = {"timeline_precision": _load_bundled_precision()}
+        self._panel_config = None
+        self._overrides_loaded = False
 
-    def _load_config(self):
-        """加载配置文件"""
-        config_path = Path(__file__).parent / "game_config.json"
+    def bind_panel_config(self, panel_config) -> None:
+        """
+        绑定 AstrBot 插件面板配置（AstrBotConfig）
+
+        绑定后面板中的 precision 为唯一来源，.tl acc 修改也会写回面板配置。
+        """
+        self._panel_config = panel_config
+        self._overrides_loaded = False
+
+    def _read_overrides(self) -> dict:
+        if self._panel_config is not None:
+            return dict(self._panel_config.get("precision") or {})
+
+        from ..storage import StorageBackend
+
+        return dict(
+            StorageBackend.load_plugin_config(_CONFIG_NAME).get("timeline_precision")
+            or {}
+        )
+
+    def _ensure_loaded(self) -> None:
+        if self._overrides_loaded:
+            return
+        self._overrides_loaded = True
         try:
-            with open(config_path, encoding="utf-8") as f:
-                self._config = json.load(f)
-        except FileNotFoundError:
-            # 默认配置
-            self._config = {
-                "timeline_precision": {
-                    "time": 1,
-                    "impact": 0,
-                    "percentage": 1,
-                    "attribute": 0,
-                    "resource": 1,
-                }
-            }
+            overrides = self._read_overrides()
+        except Exception:
+            logger.exception("加载精度配置失败，使用默认值")
+            return
+        precision = self._config["timeline_precision"]
+        for key, value in overrides.items():
+            valid = _valid_precision(value)
+            if key in PRECISION_TYPES and valid is not None:
+                precision[key] = valid
 
     def get_precision(self, precision_type: str) -> int:
         """
         获取指定类型的精度
 
         Args:
-            precision_type: 精度类型 (time/impact/percentage/attribute/resource)
+            precision_type: 精度类型（见 PRECISION_TYPES）
 
         Returns:
             int: 小数位数
         """
-        timeline_precision = self._config.get("timeline_precision", {})
-        return timeline_precision.get(precision_type, 0)
+        self._ensure_loaded()
+        return self._config["timeline_precision"].get(precision_type, 0)
 
     def format_value(self, value: int | float, precision_type: str) -> str:
         """
@@ -95,27 +168,38 @@ class GameConfig:
 
     def set_precision(self, precision_type: str, value: int) -> bool:
         """
-        设置指定类型的精度并保存到配置文件
+        设置指定类型的精度并持久化（面板配置或数据目录）
 
         Args:
-            precision_type: 精度类型 (time/impact/percentage/attribute/resource)
-            value: 小数位数
+            precision_type: 精度类型（见 PRECISION_TYPES）
+            value: 小数位数（0 ~ MAX_PRECISION）
 
         Returns:
             bool: 是否成功保存
         """
-        if "timeline_precision" not in self._config:
-            self._config["timeline_precision"] = {}
+        valid = _valid_precision(value)
+        if precision_type not in PRECISION_TYPES or valid is None:
+            return False
 
-        self._config["timeline_precision"][precision_type] = value
+        self._ensure_loaded()
+        self._config["timeline_precision"][precision_type] = valid
 
-        # 保存到配置文件
-        config_path = Path(__file__).parent / "game_config.json"
         try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(self._config, f, indent=2, ensure_ascii=False)
-            return True
+            if self._panel_config is not None:
+                precision = dict(self._panel_config.get("precision") or {})
+                precision[precision_type] = valid
+                self._panel_config["precision"] = precision
+                self._panel_config.save_config()
+                return True
+
+            from ..storage import StorageBackend
+
+            return StorageBackend.save_plugin_config(
+                _CONFIG_NAME,
+                {"timeline_precision": dict(self._config["timeline_precision"])},
+            )
         except Exception:
+            logger.exception("保存精度配置失败")
             return False
 
     def time_key(self, value: float) -> str:

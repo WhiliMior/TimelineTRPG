@@ -232,6 +232,24 @@ class StorageBackend:
             lock = cls._locks[key] = asyncio.Lock()
         return lock
 
+    # ==================== 插件配置 ====================
+
+    @classmethod
+    def _plugin_config_path(cls, name: str) -> Path:
+        return cls._get_plugin_data_dir() / "config" / f"{_safe_id(name)}.json"
+
+    @classmethod
+    def load_plugin_config(cls, name: str) -> dict:
+        """读取数据目录 config/{name}.json，不存在时返回空字典"""
+        data = cls._read_json(cls._plugin_config_path(name), {})
+        data.pop("schema_version", None)
+        return data
+
+    @classmethod
+    def save_plugin_config(cls, name: str, data: dict) -> bool:
+        """原子写入数据目录 config/{name}.json"""
+        return cls._write_json(cls._plugin_config_path(name), dict(data))
+
     # ==================== 角色数据 ====================
 
     @classmethod

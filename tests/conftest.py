@@ -152,10 +152,13 @@ def create_character(make_ctx, run):
 
 @pytest.fixture(autouse=True)
 def data_dir(tmp_path, monkeypatch):
-    """每个用例使用独立的数据目录，互不影响"""
+    """每个用例使用独立的数据目录与配置，互不影响"""
+    from timeline_trpg.trpg.infrastructure.config.game_config import game_config
     from timeline_trpg.trpg.infrastructure.storage import StorageBackend
 
     monkeypatch.setattr(_StarTools, "data_dir", tmp_path)
     StorageBackend.reset_cache()
+    game_config.reset()
     yield tmp_path
     StorageBackend.reset_cache()
+    game_config.reset()
