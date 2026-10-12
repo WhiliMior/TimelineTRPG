@@ -39,7 +39,7 @@ from .trpg.service.weapon.weapon import weapon_module
 
 # 插件信息
 PLUGIN_NAME = "TimelineTRPG"
-PLUGIN_VERSION = "v0.1"
+PLUGIN_VERSION = "v0.8"
 PLUGIN_AUTHOR = "WhiliMior"
 
 
