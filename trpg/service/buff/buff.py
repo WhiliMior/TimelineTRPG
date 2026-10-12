@@ -64,6 +64,14 @@ def parse_buff_value(value_str: str, buff_type: str) -> float:
     return value
 
 
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
 def format_buff_value(value: float, buff_type: str) -> str:
     """
     格式化buff数值用于显示
@@ -151,28 +159,30 @@ class BuffModule:
             value_str = None
             duration = None
 
+            # 第一个数值是 buff 数值，之后的纯数字才是生效次数
             for arg in extra_args:
-                # 检查是否是持续时间
-                if arg in ("0", "0t"):
-                    continue
-                if arg.endswith("t"):
-                    duration = arg
-                    continue
-                if arg.isdigit():
-                    duration = int(arg)
-                    continue
-
-                # 检查是否是类型
                 if arg in VALID_BUFF_TYPES:
                     buff_type = arg
                     continue
 
-                # 检查是否是 "数值d" 格式
+                if arg.lower().endswith("t") and _is_number(arg[:-1]):
+                    if float(arg[:-1]) > 0:
+                        duration = arg.lower()
+                    continue
+
                 if arg.lower().endswith("d") and len(arg) > 1 and arg[:-1].isdigit():
                     value_str = arg
                     continue
 
-                # 否则视为数值
+                if value_str is None:
+                    value_str = arg
+                    continue
+
+                if arg.isdigit():
+                    if int(arg) > 0:
+                        duration = int(arg)
+                    continue
+
                 value_str = arg
 
             # 判断是否使用 "数值d" 格式
