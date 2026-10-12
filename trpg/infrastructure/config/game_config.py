@@ -118,6 +118,15 @@ class GameConfig:
         except Exception:
             return False
 
+    def time_key(self, value: float) -> str:
+        """
+        生成时间线中时间点的存储键（所有写入时间线的地方都必须使用）
+
+        与历史数据保持一致：精度为 0 时为 "10"，否则为 Python 浮点字符串如 "10.0"、"10.25"。
+        读取时间线时不要自行拼键，应遍历已有键并用 float() 解析。
+        """
+        return str(self.round_value(float(value), "time"))
+
     def get_min_time_unit(self) -> float:
         """
         获取时间的最小单位（基于精度计算）

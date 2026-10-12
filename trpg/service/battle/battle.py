@@ -652,10 +652,7 @@ class BattleModule:
             battle["timeline"] = {}
 
         # 添加到时间轴
-        time_str = str(new_time_point)
-        if time_str not in battle["timeline"]:
-            battle["timeline"][time_str] = []
-        battle["timeline"][time_str].append(action)
+        self._timeline_core.timeline_slot(battle, new_time_point).append(action)
 
         # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
@@ -816,10 +813,7 @@ class BattleModule:
                 "notes": notes,
             }
 
-            time_str = str(new_time_point)
-            if time_str not in battle["timeline"]:
-                battle["timeline"][time_str] = []
-            battle["timeline"][time_str].append(action)
+            self._timeline_core.timeline_slot(battle, new_time_point).append(action)
 
         # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
@@ -1368,13 +1362,7 @@ class BattleModule:
         }
 
         # 添加到时间轴
-        if "timeline" not in battle:
-            battle["timeline"] = {}
-
-        time_str = str(new_time_point)
-        if time_str not in battle["timeline"]:
-            battle["timeline"][time_str] = []
-        battle["timeline"][time_str].append(action)
+        self._timeline_core.timeline_slot(battle, new_time_point).append(action)
 
         # current_time 和 max_time 通过 self._timeline_core 实时计算，不再存储到文件
 
