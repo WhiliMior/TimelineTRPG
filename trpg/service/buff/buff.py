@@ -130,6 +130,7 @@ class BuffModule:
         """
         user_id = ctx.sender_id or "default"
         conversation_id = ctx.group_id or ctx.session_id or user_id
+        is_group = ctx.group_id is not None
 
         if not ctx.args:
             # 没有参数，显示所有buff
@@ -248,6 +249,7 @@ class BuffModule:
                 buff_type,
                 value,
                 duration,
+                is_group,
             )
             ctx.send(result)
 
@@ -329,6 +331,7 @@ class BuffModule:
         buff_type: str,
         value: float,
         duration,
+        is_group: bool = True,
     ) -> str:
         """添加buff"""
         # 检查角色
@@ -418,6 +421,7 @@ class BuffModule:
                 callback_message=callback_message,
                 mode=mode,
                 event_type="buff",
+                is_group=is_group,
             )
 
         duration_str = "永久" if duration is None else str(duration)

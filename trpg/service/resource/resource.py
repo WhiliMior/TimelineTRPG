@@ -105,7 +105,7 @@ class ResourceRecordModule:
                 # 护盾: .rc 护盾/s {变化值} (覆盖范围) (持续时间) (f)
                 conversation_id = ctx.group_id or ctx.session_id or user_id
                 result = await self._handle_shield(
-                    user_id, conversation_id, ctx.args[1:]
+                    user_id, conversation_id, ctx.args[1:], ctx.group_id is not None
                 )
                 ctx.send(result)
             else:
@@ -119,7 +119,9 @@ class ResourceRecordModule:
         # 检查是否是 s 或 护盾
         if command == "s" or command == "护盾":
             conversation_id = ctx.group_id or ctx.session_id or user_id
-            result = await self._handle_shield(user_id, conversation_id, ctx.args[1:])
+            result = await self._handle_shield(
+                user_id, conversation_id, ctx.args[1:], ctx.group_id is not None
+            )
             ctx.send(result)
             return True
 
@@ -677,7 +679,11 @@ class ResourceRecordModule:
             return self.reply.render("save_failed")
 
     async def _handle_shield(
-        self, user_id: str, conversation_id: str, args: list[str]
+        self,
+        user_id: str,
+        conversation_id: str,
+        args: list[str],
+        is_group: bool = True,
     ) -> str:
         """处理护盾资源"""
         if len(args) < 1:
@@ -780,6 +786,7 @@ class ResourceRecordModule:
                 duration,
                 coverage_type,
                 shield_value,
+                is_group,
             )
 
         if await self._save_resource_data(user_id, resources):
@@ -910,6 +917,7 @@ class ResourceRecordModule:
         duration: str,
         coverage_type: str,
         shield_value: float,
+        is_group: bool = True,
     ):
         """
         调度护盾到期事件
@@ -952,6 +960,7 @@ class ResourceRecordModule:
             callback_message=callback_msg,
             mode=mode,
             event_type="shield",
+            is_group=is_group,
         )
 
 
