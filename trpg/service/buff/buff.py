@@ -12,7 +12,6 @@ Buff模块 - 管理角色增益/减益效果
 - 与老项目 TimelineBot 的数据存储方式完全一致
 """
 
-import asyncio
 from datetime import datetime
 
 from ...adapter.command_context import CommandContext
@@ -550,38 +549,6 @@ class BuffModule:
             lines.append(f"[{i + 1}] {name} {attr} {btype} {val_display} 持续: {dur}")
 
         return "\n".join(lines)
-
-    def get_buff_modifier(self, user_id: str, attribute: str) -> float:
-        """
-        获取角色指定属性的Buff修正值（同步版本）
-        用于与角色属性系统集成
-        """
-        buffs = asyncio.run(self._get_buffs(user_id))
-
-        total_modifier = 0.0
-        for buff in buffs:
-            if buff.get("attribute") == attribute:
-                total_modifier += buff.get("value", 0)
-
-        return total_modifier
-
-    async def get_buff_modifier_async(self, user_id: str, attribute: str) -> float:
-        """
-        获取角色指定属性的Buff修正值（异步版本）
-        用于与战斗系统集成
-        """
-        buffs = await self._get_buffs(user_id)
-
-        total_modifier = 0.0
-        for buff in buffs:
-            if buff.get("attribute") == attribute:
-                total_modifier += buff.get("value", 0)
-
-        return total_modifier
-
-
-# 用于存储正在等待保存的角色数据（避免并发问题）
-_pending_character_saves: dict[str, asyncio.Lock] = {}
 
 
 async def remove_expired_buff(

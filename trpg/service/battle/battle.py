@@ -219,26 +219,10 @@ class BattleModule:
             data["battle_list"][active_battle_id] = battle
         else:
             # 创建新的战斗 ID（使用时间戳）
-            import time
-
             new_battle_id = str(int(time.time()))
             data["active_battle_id"] = new_battle_id
             data["battle_list"][new_battle_id] = battle
 
-        StorageBackend.save_battle_timeline(storage_key, data, is_group)
-
-    def _set_active_battle(
-        self, storage_key: str, battle_id: str, is_group: bool = True
-    ):
-        """设置当前活跃的战斗"""
-        data = StorageBackend.load_battle_timeline(storage_key, is_group)
-        data["active_battle_id"] = battle_id
-        StorageBackend.save_battle_timeline(storage_key, data, is_group)
-
-    def _clear_active_battle(self, storage_key: str, is_group: bool = True):
-        """清除当前活跃的战斗"""
-        data = StorageBackend.load_battle_timeline(storage_key, is_group)
-        data["active_battle_id"] = None
         StorageBackend.save_battle_timeline(storage_key, data, is_group)
 
     def _get_character_module(self):
@@ -251,32 +235,6 @@ class BattleModule:
         """获取用户当前激活的角色"""
         char_module = self._get_character_module()
         return await char_module.get_active_character(user_id)
-
-    async def _get_character_attributes(
-        self, user_id: str, character_name: str
-    ) -> dict[str, float]:
-        """获取角色的最终属性值（包含Buff修正）"""
-        active_char = await self._get_active_character(user_id)
-        if not active_char:
-            return {}
-
-        # 获取角色基础属性
-        char_data = active_char.get("data", {})
-        attributes = {}
-
-        # 常见属性映射
-        attr_keys = ["力量", "敏捷", "体质", "智力", "感知", "魅力"]
-        for key in attr_keys:
-            if key in char_data:
-                try:
-                    attributes[key] = float(char_data[key])
-                except (ValueError, TypeError):
-                    attributes[key] = 0.0
-
-        # TODO: 从Buff系统获取属性修正
-        # TODO: 从资源修正系统获取属性修正
-
-        return attributes
 
     async def _get_final_attribute(self, user_id: str, attribute: str) -> float | None:
         """获取角色的最终属性值（包含Buff修正）"""
@@ -349,10 +307,6 @@ class BattleModule:
             return 0.0
         return impact * 20 / attribute_value
 
-    def _round_value(self, value: float, precision: int = 2) -> float:
-        """根据精度四舍五入（保留本地方法，内部使用统一配置）"""
-        return round(value, precision)
-
     def _format_time(self, value: float) -> int | float:
         """格式化时间值"""
         return game_config.round_value(value, "time")
@@ -360,50 +314,6 @@ class BattleModule:
     def _format_impact(self, value: float) -> int | float:
         """格式化影响值"""
         return game_config.round_value(value, "impact")
-
-    def _create_battle(
-        self, storage_key: str, user_id: str, is_group: bool, name: str
-    ) -> str:
-        """
-        创建新战斗
-
-        Args:
-            storage_key: 会话ID
-            user_id: 用户ID
-            is_group: 是否为群聊
-            name: 战斗名称
-        """
-        # 先检查是否已有活跃战斗
-        data = StorageBackend.load_battle_timeline(storage_key, is_group)
-        active_battle_id = data.get("active_battle_id")
-
-        if active_battle_id and active_battle_id in data.get("battle_list", {}):
-            existing_battle = data["battle_list"][active_battle_id]
-            if existing_battle.get("status") != "idle":
-                return self.reply.render("battle_already_exists")
-
-        # 创建新战斗 - 使用时间戳作为ID
-
-        new_battle_id = str(int(time.time()))
-
-        new_battle = {
-            "name": name,
-            "created_at": self._get_current_time(),
-            "participants": {},
-            "timeline": {},
-            "current_time": 0,
-            "max_time": 0,
-            "scheduled_events": [],
-        }
-
-        # 保存到数据结构中
-        if "battle_list" not in data:
-            data["battle_list"] = {}
-        data["battle_list"][new_battle_id] = new_battle
-        data["active_battle_id"] = new_battle_id
-
-        StorageBackend.save_battle_timeline(storage_key, data, is_group)
-        return self.reply.render("battle_created", name=name)
 
     async def _join_battle(self, storage_key: str, user_id: str, is_group: bool) -> str:
         """
@@ -474,86 +384,6 @@ class BattleModule:
             return self.reply.render("status_left", name=char_name)
 
         return self.reply.render("not_in_battle")
-
-    def _toggle_ready(self, storage_key: str, user_id: str, is_group: bool) -> str:
-        """切换准备状态"""
-        battle = self._get_battle(storage_key, is_group)
-
-        if user_id not in battle.get("participants", {}):
-            return self.reply.render("not_in_battle")
-
-        # 这里暂时不需要 ready 功能
-        return self.reply.render("ready")
-
-    def _start_battle(self, storage_key: str, user_id: str, is_group: bool) -> str:
-        """开始战斗"""
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return self.reply.render("no_battle")
-
-        # 开始战斗只需要有参与者即可
-        participants_count = len(battle.get("participants", {}))
-        if participants_count < 1:
-            return self.reply.render("no_ready_players")
-
-        battle["current_time"] = 0
-        battle["max_time"] = 0
-
-        self._save_battle(storage_key, battle, is_group)
-        return self.reply.render("battle_started")
-
-    def _end_battle(self, storage_key: str, user_id: str, is_group: bool) -> str:
-        """结束战斗"""
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return self.reply.render("no_battle")
-
-        # 清除战斗数据
-        battle["name"] = None
-        battle["participants"] = {}
-        battle["timeline"] = {}
-        battle["current_time"] = 0
-        battle["max_time"] = 0
-        battle["scheduled_events"] = []
-
-        self._save_battle(storage_key, battle, is_group)
-        # 清除活跃战斗ID
-        self._clear_active_battle(storage_key, is_group)
-        return self.reply.render("battle_ended")
-
-    def _battle_status(self, storage_key: str, is_group: bool) -> str:
-        """获取战斗状态"""
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return self.reply.render("no_battle")
-
-        ready_count = len(battle.get("ready", []))
-        participants_count = len(battle.get("participants", {}))
-
-        lines = [
-            self.reply.render(
-                "battle_status_header", name=battle.get("name", "未命名")
-            ),
-            self.reply.render("status_label") + battle.get("status", "unknown"),
-            self.reply.render("participants_label") + str(participants_count),
-            self.reply.render("ready_label") + str(ready_count),
-        ]
-
-        # 如果战斗已激活，显示时间轴
-        if battle.get("status") == "active" and battle.get("timeline"):
-            lines.append("")
-            lines.append(
-                self.reply.render(
-                    "timeline_current_max_time",
-                    current=battle.get("current_time", 0),
-                    max=battle.get("max_time", 0),
-                )
-            )
-
-        return "\n".join(lines)
 
     async def _add_action(
         self,
