@@ -35,11 +35,10 @@ class ExaminationModule:
             usage="<属性名> [目标值|数字1 数字2]",
             summary="属性检定",
             detail=(
-                "<属性名> - 使用tar目标值进行检定\n"
-                "<属性名> <目标值> - 设定目标值进行检定\n"
-                "<属性名> <数值1> <数值2> - 两数乘积为目标值\n"
-                "\n"
-                "例: .ex 力量 / .ex 力量 50 / .ex 力量 10 5"
+                ".ex 属性：用 .tar 目标值检定\n"
+                ".ex 属性 目标值：指定目标\n"
+                ".ex 属性 数1 数2：目标=两数乘积\n"
+                "例：.ex 力量 50"
             ),
         )
 
@@ -52,17 +51,22 @@ class ExaminationModule:
         .ex {属性名} {数字1} {数字2} - 使用两数字乘积作为目标值进行检定
         """
         if not ctx.args:
-            response = self.reply.render("no_attribute_provided")
-            ctx.send(response)
+            ctx.send(self.reply.render("no_attribute_provided"))
             return True
 
-        # 先验证属性是否合法
         raw_attribute = ctx.args[0]
         if not AttributeResolver.is_valid(raw_attribute):
-            valid_inputs = ", ".join(AttributeResolver.get_all_valid_inputs()[:10])
-            response = (
-                f"无效的属性名：{raw_attribute}\n有效的属性包括：{valid_inputs}..."
-            )
+            suggestion = AttributeResolver.suggest(raw_attribute)
+            if suggestion:
+                response = self.reply.render(
+                    "invalid_attribute_suggest",
+                    attribute=raw_attribute,
+                    suggestion=suggestion,
+                )
+            else:
+                response = self.reply.render(
+                    "invalid_attribute", attribute=raw_attribute
+                )
             ctx.send(response)
             return True
 
@@ -115,10 +119,7 @@ class ExaminationModule:
                 ctx.send(response)
                 return True
         else:
-            response = self.system_reply.render(
-                "command_not_found", command=ctx.command
-            )
-            ctx.send(response)
+            ctx.send(self.reply.render("too_many_args"))
             return True
 
         ctx.send(result)
@@ -151,7 +152,7 @@ class ExaminationModule:
         attribute_value = await self._get_character_attribute(ctx, resolved_attribute)
 
         if attribute_value is None:
-            return self.reply.render("no_character", user=ctx.sender_name or "用户")
+            return self.reply.render("no_character")
 
         if attribute_value == 0:
             return self.reply.render(
@@ -161,55 +162,36 @@ class ExaminationModule:
         # 生成随机数（1-100）
         roll_result = random.randint(1, 100)
 
-        # 计算成功率 = 属性最终值 / (目标数值 * 5)
+        # 成功率(%) = 属性最终值 / (目标数值 * 5) * 100；不设上限，超过 100 表示必定成功。
+        # 精度作用在百分比上，直接对比值取整会把 74% 变成 70%。
         if target_value > 0:
-            success_rate = attribute_value / (target_value * 5)
-            # 使用 game_config 的精度
-            success_rate = game_config.round_value(success_rate, "success_rate")
-            # 不限制上限，允许超过100%（表示必定成功）
-            success_rate = max(0, success_rate)
+            success_percent = game_config.round_value(
+                attribute_value / (target_value * 5) * 100, "success_rate"
+            )
+            success_percent = max(0, success_percent)
         else:
-            success_rate = 0
+            success_percent = 0
 
-        # 根据是否为自定义目标值生成不同的反馈格式
-        if is_custom_target:
-            # 用户自定义目标值
-            target_info = f"(目标值 {target_value})"
-        else:
-            # 使用已保存的目标值
-            target_info = f"[目标值 {target_value}]"
-
-        # 构建详细的检定反馈
-        character_name = ctx.sender_name or "角色"
-
-        lines = []
-        lines.append(f"{character_name} 进行 {resolved_attribute} 检定 {target_info}")
-
-        # 使用 game_config 格式化成功率百分比
-        success_rate_display = game_config.format_value(
-            success_rate * 100, "success_rate"
-        )
-        lines.append(
-            f"属性: {attribute_value} | 成功率: {success_rate_display}% ({attribute_value}/{target_value * 5})"
+        threshold = game_config.format_value(success_percent, "success_rate")
+        passed = roll_result <= success_percent
+        return self.reply.render(
+            "ex_result",
+            name=self._display_name(ctx),
+            attribute=resolved_attribute,
+            value=attribute_value,
+            target=target_value,
+            roll=roll_result,
+            threshold=threshold,
+            outcome=self.reply.render("check_success" if passed else "check_failure"),
         )
 
-        # 检定成功或失败（投掷结果 <= 成功率 * 100）
-        # 计算投点/成功率的比值（成功率已转换为百分比形式）
-        if success_rate > 0:
-            success_rate_percent = success_rate * 100
-            ratio = roll_result / success_rate_percent
-            ratio_display = game_config.format_value(ratio * 100, "success_rate")
-        else:
-            ratio_display = "0"
-
-        if roll_result <= success_rate * 100:
-            success_msg = self.reply.render("check_success")
-            lines.append(f"投点: {roll_result} ({ratio_display}%) {success_msg}")
-        else:
-            failure_msg = self.reply.render("check_failure")
-            lines.append(f"投点: {roll_result} ({ratio_display}%) {failure_msg}")
-
-        return "\n".join(lines)
+    @staticmethod
+    def _display_name(ctx: CommandContext) -> str:
+        """结果首行的归属：优先当前角色名，没有时用发送者昵称"""
+        character = character_reader.get_active_character(ctx.sender_id or "default")
+        if character and character.get("name"):
+            return str(character["name"])
+        return ctx.sender_name or "角色"
 
     async def _resolve_attribute_name(self, attribute: str) -> str:
         """解析属性名称，使用统一的 AttributeResolver"""

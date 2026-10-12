@@ -13,6 +13,7 @@
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.text_style import clip_lines, item, kv, num, title, wrap
 
 # 武器类型中英文映射
 WEAPON_TYPE_MAP = {
@@ -67,12 +68,22 @@ class WeaponModule:
             usage="[序号|show|del|create] [参数]",
             summary="武器管理",
             detail=(
-                "- 显示武器列表\n"
-                "{序号} - 选择武器\n"
-                "show {序号} - 查看武器详情\n"
-                "del {序号}/all - 删除武器\n"
-                "create {名称} {类型} {属性} (伤害) (射程) - 创建武器"
+                ".wp：武器列表\n"
+                ".wp 序号：装备武器\n"
+                ".wp show 序号：武器详情\n"
+                ".wp del 序号/all：删除武器\n"
+                ".wp create 名称 类型 属性 (伤害) (射程)\n"
+                "完整参数创建：.help setupWP"
             ),
+        )
+
+    @property
+    def help_entry_setup(self) -> HelpEntry:
+        return HelpEntry(
+            module="setupWP",
+            usage="名称:xx,类型:xx,...",
+            summary="创建武器",
+            detail=self.reply.render("wp_setup_usage"),
         )
 
     async def wp_setup(self, ctx: CommandContext) -> bool:
@@ -98,9 +109,7 @@ class WeaponModule:
         weapon_data = self._parse_weapon_args(raw_args)
 
         if not weapon_data:
-            ctx.send(
-                "用法: .setupWP 名称:值,类型:值,...\n类型只支持: 增幅(amplifier)、火力(artillery)、无类型(none)\n示例: .setupWP 名称:激光枪,类型:火力,伤害:20,负重:3.5"
-            )
+            ctx.send(wrap(self.reply.render("wp_setup_usage")))
             return True
 
         # 创建武器
@@ -433,17 +442,26 @@ class WeaponModule:
         if not weapons:
             return self.reply.render("weapon_list_empty")
 
-        lines = [self.reply.render("weapon_list_header", count=len(weapons))]
-
+        items = []
         for i, weapon in enumerate(weapons):
-            equipped = "●" if weapon.get("equipped", False) else f"{i + 1}"
-            type_display = self._get_type_display(weapon.get("type", ""))
-            weight = weapon.get("weight", 0)
-            lines.append(
-                f"[{equipped}] {weapon.get('name', '未命名')} - {type_display} ({weapon.get('attribute', '')}) 负重:{weight}"
+            parts = [
+                weapon.get("name", "未命名"),
+                self._get_type_display(weapon.get("type", "")),
+                weapon.get("attribute", ""),
+                f"负重{num(weapon.get('weight', 0))}",
+            ]
+            items.append(
+                item(
+                    i + 1,
+                    " ".join(str(p) for p in parts if p),
+                    active=weapon.get("equipped", False),
+                )
             )
 
-        return "\n".join(lines)
+        lines = [self.reply.render("weapon_list_header", count=len(weapons))]
+        lines.extend(clip_lines(items))
+        lines.append(self.reply.render("weapon_list_footer"))
+        return wrap("\n".join(lines))
 
     async def _show_weapon(self, user_id: str, index: int) -> str:
         """显示武器详情"""
@@ -458,31 +476,33 @@ class WeaponModule:
         weapon = weapons[index - 1]
         weapon_type = weapon.get("type", "")
 
+        equipped = (
+            self.reply.render("weapon_equipped_mark")
+            if weapon.get("equipped", False)
+            else ""
+        )
         lines = [
-            f"=== {weapon.get('name', '未命名')} ===",
-            f"类型: {self._get_type_display(weapon_type)}",
-            f"属性: {weapon.get('attribute', '')}",
-            f"伤害: {weapon.get('damage', 0)}",
-            f"前摇: {weapon.get('cast', 0)}",
-            f"射程: {weapon.get('range', 0)}",
-            f"负重: {weapon.get('weight', 0)}",
-            f"装备: {'是' if weapon.get('equipped', False) else '否'}",
+            title(weapon.get("name", "未命名"), equipped),
+            kv("类型", self._get_type_display(weapon_type)),
+            kv("属性", weapon.get("attribute", "") or "无"),
+            kv("伤害", num(weapon.get("damage", 0))),
+            kv("前摇", f"{num(weapon.get('cast', 0))}t"),
+            kv("射程", num(weapon.get("range", 0))),
+            kv("负重", num(weapon.get("weight", 0))),
         ]
 
         # 火力武器显示弹药信息
         if weapon_type == "artillery":
             current_load = weapon.get("current_load", 0)
             max_load = weapon.get("load", 0)
-            reload_time = weapon.get("reload_time", 0)
-            lines.append(f"弹药: {current_load}/{max_load}")
-            lines.append(f"装填时间: {reload_time}")
+            lines.append(kv("弹药", f"{current_load}/{max_load}"))
+            lines.append(kv("装填", f"{num(weapon.get('reload_time', 0))}t"))
 
-        # 显示备注
         note = weapon.get("note", "")
         if note:
-            lines.append(f"备注: {note}")
+            lines.append(kv("备注", note))
 
-        return "\n".join(lines)
+        return wrap("\n".join(lines))
 
     async def _select_weapon(self, user_id: str, index: int) -> str:
         """选择武器"""

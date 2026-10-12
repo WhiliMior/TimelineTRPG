@@ -10,7 +10,16 @@ from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.text_style import delta, hint
+from ...infrastructure.timeline_formatter import describe_expiry
 from ..battle.core import get_conversation_current_time
+
+
+def _fmt(value: float) -> str:
+    return game_config.format_value(value, "resource")
+
+
+_COVERAGE_NAMES = {"all": "全类型", "所有": "全类型", "hp": "体力", "mp": "意志"}
 
 
 class ResourceRecordModule:
@@ -46,6 +55,8 @@ class ResourceRecordModule:
         "精神": "mp",
         "all": "all",
         "所有": "all",
+        "全部": "all",
+        "全类型": "all",
     }
 
     def __init__(self):
@@ -59,13 +70,12 @@ class ResourceRecordModule:
             usage="[hp/mp|护盾|reset|show] [变化值] [变化类型|f]",
             summary="资源记录",
             detail=(
-                "- 显示当前资源状态\n"
-                "{hp/mp} {变化值} (持续时间) (f) - 修改资源\n"
-                "护盾/s {变化值} (覆盖范围) (持续时间) - 添加护盾\n"
-                "reset - 重置资源到最大值并清除护盾\n"
-                "show - 显示当前资源状态\n"
-                "\n"
-                "f 标记: 允许修改超过上限/下限"
+                ".rc：查看体力、意志、护盾\n"
+                ".rc hp -10 (类型) (f)：改体力\n"
+                ".rc mp +5：改意志\n"
+                ".rc s 20 (范围) (持续)：加护盾\n"
+                ".rc reset：回满并清除护盾\n"
+                "f：允许超过上限或低于0"
             ),
         )
 
@@ -128,10 +138,12 @@ class ResourceRecordModule:
             ctx.send(result)
             return True
 
-        # 无效命令
-        response = self.system_reply.render("command_not_found", command=ctx.command)
-        ctx.send(response)
+        ctx.send(self.reply.render("unknown_subcommand", subcommand=ctx.args[0]))
         return True
+
+    @staticmethod
+    def _coverage_name(coverage_type: str) -> str:
+        return _COVERAGE_NAMES.get(coverage_type, coverage_type)
 
     async def _get_active_character(self, user_id: str) -> dict | None:
         """获取用户当前激活的角色"""
@@ -303,15 +315,11 @@ class ResourceRecordModule:
             shield_after = shield["value"]
             remaining_damage -= shield_absorb
 
-            coverage_name = shield.get("coverage_type", "all")
-            if coverage_name in ["all", "所有"]:
-                shield_info.append(
-                    f"全类型护盾: {game_config.format_value(shield_absorb, 'resource')} (调整: {game_config.format_value(shield_before, 'resource')}→{game_config.format_value(shield_after, 'resource')})"
-                )
-            else:
-                shield_info.append(
-                    f"{coverage_name}护盾: {game_config.format_value(shield_absorb, 'resource')} (调整: {game_config.format_value(shield_before, 'resource')}→{game_config.format_value(shield_after, 'resource')})"
-                )
+            coverage_name = self._coverage_name(shield.get("coverage_type", "all"))
+            shield_info.append(
+                f"  {coverage_name}护盾 "
+                f"{delta(_fmt(shield_before), _fmt(shield_after))}"
+            )
 
         # 移除值为0的护盾
         resources["shields"] = [
@@ -325,12 +333,11 @@ class ResourceRecordModule:
         damage_after_shield = remaining_damage
 
         if shield_info:
-            # 每种护盾分开显示，换行
-            shield_msg = "\n".join(shield_info)
-            return (
-                actual_change,
-                f"\n承伤: {game_config.format_value(damage_to_absorb, 'resource')}→{game_config.format_value(damage_after_shield, 'resource')}\n护盾保护:\n{shield_msg}",
-            )
+            lines = [
+                f"护盾承伤：{delta(_fmt(damage_to_absorb), _fmt(damage_after_shield))}"
+            ]
+            lines.extend(shield_info)
+            return actual_change, "\n" + "\n".join(lines)
         else:
             return value_change, ""
 
@@ -481,7 +488,7 @@ class ResourceRecordModule:
                 result_value = result_value * (1 + mod_value)
                 modifier_details.append(f"{mod_source}: +{display_val}")
                 calculation_steps.append(
-                    f"{mod_source}: {before_value:.1f} + {increase:.1f}({display_val}) = {result_value:.1f}"
+                    f"{mod_source} +{_fmt(increase)}（{display_val}）"
                 )
             else:
                 # 减伤：减少百分比
@@ -490,7 +497,7 @@ class ResourceRecordModule:
                 result_value = result_value * (1 - mod_value)
                 modifier_details.append(f"{mod_source}: -{display_val}")
                 calculation_steps.append(
-                    f"{mod_source}: {before_value:.1f} - {reduction:.1f}({display_val}) = {result_value:.1f}"
+                    f"{mod_source} -{_fmt(reduction)}（{display_val}）"
                 )
 
         # 2. 再应用固定值修饰
@@ -507,37 +514,24 @@ class ResourceRecordModule:
 
             if mod_range.startswith("+"):
                 # 增益：增加固定值
-                before_value = result_value
                 result_value = result_value + mod_value
                 modifier_details.append(f"{mod_source}: +{mod_value:.1f}")
-                calculation_steps.append(
-                    f"{mod_source}: {before_value:.1f} + {mod_value:.1f} = {result_value:.1f}"
-                )
+                calculation_steps.append(f"{mod_source} +{_fmt(mod_value)}")
             else:
                 # 减伤：减少固定值
-                before_value = result_value
                 result_value = result_value - mod_value
                 modifier_details.append(f"{mod_source}: -{mod_value:.1f}")
-                calculation_steps.append(
-                    f"{mod_source}: {before_value:.1f} - {mod_value:.1f} = {result_value:.1f}"
-                )
+                calculation_steps.append(f"{mod_source} -{_fmt(mod_value)}")
 
         # 恢复原始符号
         final_value = result_value if is_increase else -result_value
 
-        # 格式化修饰信息
+        # 修饰信息：总览一行，之后每个修饰一行
         modifier_info = ""
         if modifier_details:
-            # 计算总变化
-            total_change = abs(final_value) - original_abs_value
-            change_sign = "+" if total_change > 0 else ""
-
-            # 简化的计算过程
-            if calculation_steps:
-                calc_text = " → ".join(calculation_steps)
-                modifier_info = f" (修正: {original_abs_value:.1f}{change_sign}{total_change:.1f} = {abs(final_value):.1f})\n  {calc_text}"
-            else:
-                modifier_info = f" (修正: {' '.join(modifier_details)})"
+            lines = [f"修正：{delta(_fmt(original_abs_value), _fmt(abs(final_value)))}"]
+            lines.extend(f"  {step}" for step in calculation_steps or modifier_details)
+            modifier_info = "\n" + "\n".join(lines)
 
         return final_value, modifier_info
 
@@ -646,27 +640,17 @@ class ResourceRecordModule:
         resources[current_attr] = new_value
 
         if await self._save_resource_data(user_id, resources):
-            # 格式化显示：调整前值→调整后值/上限
-            attr_name = "HP" if resource_type == "hp" else "MP"
-
-            # 使用统一精确度格式化
-            display = f"{game_config.format_value(current_value, 'resource')}→{game_config.format_value(new_value, 'resource')}/{game_config.format_value(max_value, 'resource')}"
-
-            # 添加资源修饰信息
-            if modifier_info:
-                display += modifier_info
-
-            # 添加护盾保护信息
-            if shield_info:
-                display += shield_info
-
+            # 调整前→调整后/上限，之后每行一项：修正、护盾承伤、溢出提示
+            display = f"{delta(_fmt(current_value), _fmt(new_value))}/{_fmt(max_value)}"
+            display += modifier_info + shield_info
             if allow_overflow:
-                display += " (已启用溢出模式)"
+                display += "\n" + hint("已允许超出上下限")
 
-            if resource_type == "hp":
-                return self.reply.render("hp_changed", change="", value=display)
-            else:
-                return self.reply.render("mp_changed", change="", value=display)
+            return self.reply.render(
+                "hp_changed" if resource_type == "hp" else "mp_changed",
+                name=character.get("name", "角色"),
+                value=display,
+            )
         else:
             return self.reply.render("save_failed")
 
@@ -739,8 +723,7 @@ class ResourceRecordModule:
                 if len(args) > 2 and is_coverage_type(args[2]):
                     coverage_type = self.COVERAGE_TYPE_MAPPING[args[2].lower()]
             else:
-                # 未知参数，视为无效
-                return self.reply.render("invalid_value")
+                return self.reply.render("invalid_shield_arg", arg=arg1)
 
         # 创建护盾
         resources = await self._get_resource_data(user_id)
@@ -770,8 +753,9 @@ class ResourceRecordModule:
         resources["shields"] = shields
 
         # 如果有持续时间，调度护盾到期事件
+        expiry = ""
         if duration and duration != "0t" and duration != "0":
-            await self._schedule_shield_event(
+            event = await self._schedule_shield_event(
                 conversation_id,
                 user_id,
                 shield_created_at,
@@ -780,24 +764,18 @@ class ResourceRecordModule:
                 shield_value,
                 is_group,
             )
+            expiry = "\n" + describe_expiry(event)
 
         if await self._save_resource_data(user_id, resources):
-            # 计算添加后的该类型护盾总值
             shields_after = shields_before + shield_value
-
-            # 获取覆盖类型的中文名称
-            coverage_name = coverage_type
-            if coverage_type == "all":
-                coverage_name = "全类型"
-            elif coverage_type == "hp":
-                coverage_name = "体力"
-            elif coverage_type == "mp":
-                coverage_name = "意志"
-
-            # 显示格式：先前值→添加后总值
-            display = f"{game_config.format_value(shields_before, 'resource')}→{game_config.format_value(shields_after, 'resource')}"
-
-            return self.reply.render("shield_added", value=display, type=coverage_name)
+            return (
+                self.reply.render(
+                    "shield_added",
+                    value=delta(_fmt(shields_before), _fmt(shields_after)),
+                    type=self._coverage_name(coverage_type),
+                )
+                + expiry
+            )
         else:
             return self.reply.render("save_failed")
 
@@ -814,69 +792,23 @@ class ResourceRecordModule:
         current_mp = resources.get("current_mp", 0)
         shields = resources.get("shields", [])
 
-        # 构建状态信息
-        lines = []
+        def current_of(current: float, maximum: float | None) -> str:
+            return f"{_fmt(current)}/{_fmt(maximum) if maximum is not None else '未知'}"
 
-        # HP
-        if max_hp is not None:
-            lines.append(
-                f"体力：{game_config.format_value(current_hp, 'resource')}/{game_config.format_value(max_hp, 'resource')}"
-            )
-        else:
-            lines.append(
-                f"体力：{game_config.format_value(current_hp, 'resource')}/未知"
-            )
-
-        # MP
-        if max_mp is not None:
-            lines.append(
-                f"意志：{game_config.format_value(current_mp, 'resource')}/{game_config.format_value(max_mp, 'resource')}"
-            )
-        else:
-            lines.append(
-                f"意志：{game_config.format_value(current_mp, 'resource')}/未知"
-            )
-
-        # 护盾
-        if shields:
-            lines.append("")
-            lines.append("护盾：")
-
-            # 统计不同类型护盾的总值
-            hp_shield = 0
-            mp_shield = 0
-            all_shield = 0
-
-            for shield in shields:
-                cov = shield.get("coverage_type", "all")
-                val = shield.get("value", 0)
-                if cov in ["hp", "体力"]:
-                    hp_shield += val
-                elif cov in ["mp", "意志"]:
-                    mp_shield += val
-                elif cov in ["all", "所有"]:
-                    all_shield += val
-
-            if hp_shield > 0:
-                lines.append(
-                    f"体力类型： {game_config.format_value(hp_shield, 'resource')}"
-                )
-            if mp_shield > 0:
-                lines.append(
-                    f"意志类型：{game_config.format_value(mp_shield, 'resource')}"
-                )
-            if all_shield > 0:
-                lines.append(
-                    f"全类型：{game_config.format_value(all_shield, 'resource')}"
-                )
-        else:
-            lines.append("护盾：无")
+        totals: dict[str, float] = {}
+        for shield in shields:
+            name = self._coverage_name(shield.get("coverage_type", "all"))
+            totals[name] = totals.get(name, 0) + shield.get("value", 0)
+        shield_text = (
+            " ".join(f"{name}{_fmt(v)}" for name, v in totals.items() if v > 0) or "无"
+        )
 
         return self.reply.render(
             "resource_show",
-            hp=lines[0],
-            mp=lines[1],
-            shield="\n".join(lines[2:]) if len(lines) > 2 else "无",
+            name=character.get("name", "角色"),
+            hp=current_of(current_hp, max_hp),
+            mp=current_of(current_mp, max_mp),
+            shield=shield_text,
         )
 
     async def _reset_resources(self, user_id: str) -> str:
@@ -939,8 +871,8 @@ class ResourceRecordModule:
         )
 
         # 构建描述
-        action_desc = f"{character_name} {coverage_type}护盾 {shield_value}"
-        callback_msg = f"{character_name} {coverage_type}护盾 {shield_value} 到期"
+        action_desc = f"{character_name} {self._coverage_name(coverage_type)}护盾{_fmt(shield_value)}"
+        callback_msg = action_desc
 
         return await schedule_event(
             conversation_id=conversation_id,

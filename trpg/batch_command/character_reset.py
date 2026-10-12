@@ -10,10 +10,13 @@
 指令转发通过 infrastructure 层的 CommandDispatcher 实现。
 """
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...adapter.command_context import CommandContext
+    from ..adapter.command_context import CommandContext
+
+logger = logging.getLogger("TimelineTRPG.character_reset")
 
 
 class CharacterResetModule:
@@ -84,47 +87,43 @@ class CharacterResetModule:
         user_id = ctx.sender_id or "default"
 
         # 导入 service 层模块（单向引用）
+        from ..infrastructure.character_reader import character_reader
         from ..service.buff.buff import buff_module
         from ..service.resource.modifier import resource_modifier_module
         from ..service.resource.resource import resource_record_module
 
-        results = []
-        errors = []
-
-        # 1. 重置资源（HP、MP 到最大值，清除护盾）
-        try:
-            result = await resource_record_module._reset_resources(user_id)
-            results.append(f"资源重置: {result}")
-        except Exception as e:
-            errors.append(f"资源重置失败: {str(e)}")
-
-        # 2. 删除所有资源修饰
-        try:
-            result = await resource_modifier_module._delete_all_modifiers(user_id)
-            results.append(f"资源修饰: {result}")
-        except Exception as e:
-            errors.append(f"资源修饰清除失败: {str(e)}")
-
-        # 3. 删除所有 buff
-        try:
-            result = await buff_module._remove_all_buffs(user_id)
-            results.append(f"Buff: {result}")
-        except Exception as e:
-            errors.append(f"Buff清除失败: {str(e)}")
-
-        # 构建最终回复
         self._ensure_reply_manager()
-        if errors:
-            return self.reply.render(
-                "reset_partial",
-                success="\n".join(results) if results else "无",
-                errors="\n".join(errors),
+        character = character_reader.get_active_character(user_id)
+        if not character:
+            return self.reply.render("no_character")
+
+        steps = [
+            ("part_resource", resource_record_module._reset_resources),
+            ("part_modifier", resource_modifier_module._delete_all_modifiers),
+            ("part_buff", buff_module._remove_all_buffs),
+        ]
+        lines = []
+        failed = 0
+        for part_key, step in steps:
+            part = self.reply.render(part_key)
+            try:
+                result = await step(user_id)
+            except Exception:
+                logger.exception("角色重置步骤失败: %s", part_key)
+                failed += 1
+                lines.append(self.reply.render("reset_line_failed", part=part))
+                continue
+            # 子指令的回复可能带“用法/提示”行，汇总时只保留结论
+            lines.append(
+                self.reply.render(
+                    "reset_line", part=part, result=result.split("\n", 1)[0]
+                )
             )
-        else:
-            return self.reply.render(
-                "reset_success",
-                details="\n".join(results),
-            )
+
+        key = "reset_partial" if failed else "reset_success"
+        return self.reply.render(
+            key, name=character.get("name", ""), details="\n".join(lines)
+        )
 
 
 # 创建模块实例

@@ -10,6 +10,7 @@ from ...adapter.message import ReplyManager
 from ...infrastructure.character_picture import character_picture_generator
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.text_style import clip_lines, item, kv, num, title, wrap
 
 
 class CharacterModule:
@@ -28,7 +29,6 @@ class CharacterModule:
 
     def __init__(self):
         self.reply = ReplyManager("character")
-        self.system_reply = ReplyManager("system")
 
     @property
     def help_entry(self) -> HelpEntry:
@@ -37,14 +37,12 @@ class CharacterModule:
             usage="[序号|show|del|reset] [参数]",
             summary="角色管理",
             detail=(
-                "=== 角色管理 ===\n"
-                "{序号} - 切换角色\n"
-                "show - 查看当前角色参数\n"
-                "del {序号} - 删除指定角色\n"
-                "del all - 删除所有角色\n"
-                "reset - 重置角色状态（HP/MP/护盾/修饰/Buff）\n"
-                "\n"
-                "创建角色: .tlsetup 名称:xxx,属性:值,..."
+                ".chr：角色列表\n"
+                ".chr 序号：切换角色\n"
+                ".chr show：查看角色属性\n"
+                ".chr del 序号/all：删除角色\n"
+                ".chr reset：回满体力意志，清除护盾、资源修正和Buff\n"
+                "创建角色：.help tlsetup"
             ),
         )
 
@@ -54,7 +52,11 @@ class CharacterModule:
             module="tlsetup",
             usage="名称:xxx,属性:值,...",
             summary="创建角色",
-            detail=("创建新角色\n格式: .tlsetup 名称:xxx,属性:值,..."),
+            detail=(
+                ".tlsetup 名称:xx,属性:值,...\n"
+                "例：.tlsetup 名称:勇者,力量:10,敏捷:8\n"
+                "同名角色会被覆盖更新"
+            ),
         )
 
     def _is_number(self, s: str) -> bool:
@@ -136,9 +138,7 @@ class CharacterModule:
         user_id = ctx.sender_id or "default"
 
         if not ctx.args:
-            ctx.send(
-                "用法: .tlsetup 名称:xxx,属性:值,...\n示例: .tlsetup 名称:勇者,力量:10,敏捷:8"
-            )
+            ctx.send(wrap(self.reply.render("tlsetup_usage")))
             return True
 
         # 合并所有参数（因为属性中可能包含空格）
@@ -148,7 +148,7 @@ class CharacterModule:
         attributes = self._parse_character_attributes(args_str)
 
         if not attributes:
-            ctx.send("角色数据格式错误，请使用 名称:xxx,属性:值 的格式")
+            ctx.send(wrap(self.reply.render("tlsetup_format_error")))
             return True
 
         # 获取角色名称，支持多种名称字段
@@ -188,9 +188,16 @@ class CharacterModule:
 
         # 保存角色数据
         if await self._save_characters(user_id, existing_characters):
-            ctx.send(f"角色 [{character_name}] 创建成功！")
+            key = (
+                "character_updated"
+                if existing_index is not None
+                else "character_created"
+            )
+            ctx.send(
+                self.reply.render(key, name=character_name, count=len(attributes) - 1)
+            )
         else:
-            ctx.send("保存角色数据失败")
+            ctx.send(self.reply.render("save_failed"))
 
         return True
 
@@ -251,10 +258,7 @@ class CharacterModule:
                 response = self.reply.render("index_must_be_number")
                 ctx.send(response)
         else:
-            response = self.system_reply.render(
-                "command_not_found", command=ctx.command
-            )
-            ctx.send(response)
+            ctx.send(self.reply.render("unknown_subcommand", subcommand=ctx.args[0]))
 
         return True
 
@@ -273,20 +277,24 @@ class CharacterModule:
         if not characters:
             return self.reply.render("no_character")
 
-        lines = [self.reply.render("character_list_header", count=str(len(characters)))]
-
+        items = []
         for i, character in enumerate(characters):
-            active_status = "●" if character.get("active", False) else "  "
             name = character.get(
                 "name", self.reply.render("default_character_name", index=str(i + 1))
             )
             level = character.get("data", {}).get("等级", character.get("level", 1))
+            items.append(
+                item(
+                    i + 1,
+                    f"{name} Lv{num(level)}",
+                    active=character.get("active", False),
+                )
+            )
 
-            line = f"[{i + 1}] [{active_status}] {name} lv{level}"
-            lines.append(line)
-
+        lines = [self.reply.render("character_list_header", count=len(characters))]
+        lines.extend(clip_lines(items))
         lines.append(self.reply.render("character_list_footer"))
-        return "\n".join(lines)
+        return wrap("\n".join(lines))
 
     async def _select_character(self, user_id: str, index: int) -> dict[str, str]:
         """选择启用角色"""
@@ -428,11 +436,11 @@ class CharacterModule:
         name = active_char.get("name", "未知")
         data = active_char.get("data", {})
 
-        lines = [f"=== {name} ==="]
+        lines = [title(name)]
         for key, value in data.items():
-            lines.append(f"{key}: {value}")
+            lines.append(kv(key, num(value)))
 
-        return "\n".join(lines)
+        return wrap("\n".join(lines))
 
     async def get_active_character(self, user_id: str) -> dict | None:
         """获取当前激活角色"""

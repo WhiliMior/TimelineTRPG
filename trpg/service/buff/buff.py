@@ -21,6 +21,8 @@ from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
 from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ...infrastructure.text_style import clip_lines, item, wrap
+from ...infrastructure.timeline_formatter import describe_expiry
 from ..battle.core import get_conversation_current_time
 
 # Buff类型常量
@@ -74,6 +76,14 @@ def _is_number(text: str) -> bool:
         return False
 
 
+def _duration_label(duration) -> str:
+    """持续时间显示：3t → 持续3t，3 → 3次，无 → 空"""
+    if duration is None or duration == "":
+        return ""
+    text = str(duration)
+    return f"持续{text}" if text.endswith("t") else f"{text}次"
+
+
 def format_buff_value(value: float, buff_type: str) -> str:
     """
     格式化buff数值用于显示
@@ -119,10 +129,12 @@ class BuffModule:
             usage="[add|del|show] [参数]",
             summary="Buff增益管理",
             detail=(
-                "- 显示buff列表\n"
-                "add {名称} {属性} {类型} {数值} (持续时间) - 添加buff\n"
-                "show (覆盖范围) - 查看所有Buff或对范围生效的Buff\n"
-                "del {序号}/all - 移除Buff"
+                ".buff：Buff列表\n"
+                ".buff add 名称 属性 类型 数值 (持续)\n"
+                "类型：直接/最终 + 加算/乘算\n"
+                "例：.buff add 祝福 力量 直接加算 5 3t\n"
+                ".buff show (范围)：按范围筛选\n"
+                ".buff del 序号/all：移除"
             ),
         )
 
@@ -226,17 +238,23 @@ class BuffModule:
 
                 try:
                     value = parse_buff_value(value_str, buff_type)
-                except ValueError as e:
-                    response = str(e)
-                    ctx.send(response)
+                except ValueError:
+                    ctx.send(self.reply.render("invalid_value", value=value_str))
                     return True
 
             # 验证属性是否合法（使用 AttributeResolver）
             if not AttributeResolver.is_valid(attribute):
-                valid_inputs = ", ".join(AttributeResolver.get_all_valid_inputs()[:10])
-                response = (
-                    f"无效的属性名：{attribute}\n有效的属性包括：{valid_inputs}..."
-                )
+                suggestion = AttributeResolver.suggest(attribute)
+                if suggestion:
+                    response = self.reply.render(
+                        "invalid_attribute_suggest",
+                        attribute=attribute,
+                        suggestion=suggestion,
+                    )
+                else:
+                    response = self.reply.render(
+                        "invalid_attribute", attribute=attribute
+                    )
                 ctx.send(response)
                 return True
 
@@ -280,9 +298,11 @@ class BuffModule:
                 result = await self._list_buffs(user_id)
             ctx.send(result)
 
+        elif command in ("add", "del"):
+            ctx.send(self.reply.render(f"{command}_usage"))
+
         else:
-            result = await self._list_buffs(user_id)
-            ctx.send(result)
+            ctx.send(self.reply.render("unknown_subcommand", subcommand=ctx.args[0]))
 
         return True
 
@@ -391,11 +411,10 @@ class BuffModule:
         if duration is not None:
             # 构建描述
             action_desc = (
-                f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
+                f"{character_name} {buff_name} {resolved_attribute}{buff_type}"
+                f"{format_buff_value(value, buff_type)}"
             )
-            callback_message = (
-                f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
-            )
+            callback_message = action_desc
 
             duration_value = (
                 float(duration[:-1])
@@ -403,9 +422,10 @@ class BuffModule:
                 else float(duration)
             )
 
+            event = None
             current_time = get_conversation_current_time(conversation_id, is_group)
             if current_time is not None:
-                await schedule_event(
+                event = await schedule_event(
                     conversation_id=conversation_id,
                     user_id=user_id,
                     character_name=character_name,
@@ -426,16 +446,16 @@ class BuffModule:
                     is_group=is_group,
                 )
 
-        duration_str = "永久" if duration is None else str(duration)
-        value_display = format_buff_value(value, buff_type)
-        return self.reply.render(
+        result = self.reply.render(
             "buff_added",
             name=buff_name,
             attribute=resolved_attribute,
             type=buff_type,
-            value=value_display,
-            duration=duration_str,
+            value=format_buff_value(value, buff_type),
         )
+        if duration is None:
+            return result + "\n" + self.reply.render("buff_permanent")
+        return result + "\n" + describe_expiry(event)
 
     async def _remove_buff(self, user_id: str, attribute: str | None) -> str:
         """删除buff（按属性名）"""
@@ -536,19 +556,21 @@ class BuffModule:
                 return self.reply.render("no_buffs_for_attribute", attribute=attribute)
             buffs = filtered
 
-        lines = [self.reply.render("buff_list_header")]
-
+        lines = []
         for i, buff in enumerate(buffs):
-            name = buff.get("name", "")
-            attr = buff.get("attribute", "")
             btype = buff.get("type", "")
-            val = buff.get("value", 0)
-            dur = buff.get("duration", "永久")
-            # 格式化数值显示
-            val_display = format_buff_value(val, btype)
-            lines.append(f"[{i + 1}] {name} {attr} {btype} {val_display} 持续: {dur}")
+            text = (
+                f"{buff.get('name', '')} {buff.get('attribute', '')}"
+                f"{btype}{format_buff_value(buff.get('value', 0), btype)}"
+            )
+            duration = _duration_label(buff.get("duration"))
+            if duration:
+                text += f" {duration}"
+            lines.append(item(i + 1, text))
 
-        return "\n".join(lines)
+        lines = clip_lines(lines, more_hint=self.reply.render("list_more_hint"))
+        header = self.reply.render("buff_list_header", count=len(buffs))
+        return wrap("\n".join([header, *lines]))
 
 
 async def remove_expired_buff(

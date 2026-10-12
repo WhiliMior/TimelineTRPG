@@ -5,13 +5,23 @@
 """
 
 from .config.game_config import game_config
+from .text_style import DIVIDER, clip_lines, title, wrap
 
 
 class TimelineFormatter:
     """
     时间线格式化器
 
-    提供统一的时间轴显示方法，支持属性/武器/时间线三种模式的格式化。
+    紧凑版（适配手机屏幕）：每个行动两行，定时事件按到期时间排序并标注剩余时间。
+
+        【森林遭遇】当前2t/最大8t
+        ──────
+        5t [游侠] 长弓 影响12
+          2.5t起 前摇2.5t 齐射
+        ──────
+        【定时】
+        5t 勇者 力量+5（剩3t）
+        ×2 法师 护甲15%
     """
 
     @staticmethod
@@ -24,218 +34,182 @@ class TimelineFormatter:
         格式化时间轴显示
 
         Args:
-            battle: 战斗数据字典
-            attribute_label: 属性列的显示标签（默认"属性"，wp模式为"武器"）
+            battle: 战斗数据字典（current_time / max_time 需由调用方实时计算后填入）
+            attribute_label: 保留参数，武器行动会自动显示武器名
             extra_info: 额外信息字典，用于显示弹药等（如 {"ammo": "当前/总数"}）
 
         Returns:
             str: 格式化后的时间轴字符串
         """
-        timeline = battle.get("timeline", {})
-        if not timeline:
-            return TimelineFormatter._get_empty_message()
-
-        # 按时间点排序（直接使用已有键，不要按精度重新拼键，否则会与存储键不一致）
-        sorted_points = sorted(
-            ((float(key), actions) for key, actions in timeline.items()),
-            key=lambda item: item[0],
-        )
-
+        reply = _reply()
         current_time = battle.get("current_time", 0)
-        max_time = battle.get("max_time", 0)
-
         lines = [
-            TimelineFormatter._get_header(battle.get("name", "未知战斗")),
-            TimelineFormatter._get_time_info(current_time, max_time),
+            reply.render(
+                "timeline_header",
+                name=battle.get("name", "未知战斗"),
+                current=_time(current_time),
+                max=_time(battle.get("max_time", 0)),
+            )
         ]
 
-        # 收集每个角色的最新行动（只显示未完成的行动）
-        # key: (user_id, character_name), value: (end_time, action)
-        latest_action_by_character: dict[tuple[str, str], tuple[float, dict]] = {}
-
-        for time_point, actions in sorted_points:
-            if time_point < current_time:
-                continue
-
-            if actions:
-                for action in actions:
-                    char_name = action.get("character_name", "")
-                    user_id = action.get("user_id", "")
-                    key = (user_id, char_name)
-
-                    # 只保留每个角色最新的行动（时间点最大的）
-                    if (
-                        key not in latest_action_by_character
-                        or time_point > latest_action_by_character[key][0]
-                    ):
-                        latest_action_by_character[key] = (time_point, action)
-
-        # 按时间点排序显示每个角色的最新行动
-        sorted_actions = sorted(
-            latest_action_by_character.items(),
-            key=lambda x: x[1][0],  # 按时间点排序
-        )
-
-        if sorted_actions:
-            for (user_id, char_name), (time_point, action) in sorted_actions:
-                # 检查角色状态
-                user_participants = battle["participants"].get(user_id, {})
-                char_info = user_participants.get(char_name, {})
-
-                if char_info.get("status") != "参与中":
-                    continue
-
-                time_str = game_config.round_value(time_point, "time")
-
-                # 时间分隔符
-                dashes = "—" * 5
-                lines.append(f"\n{dashes} {time_str}t {dashes}")
-
-                # 获取行动详情
-                action_lines = TimelineFormatter._format_action(action, attribute_label)
-                lines.extend(action_lines)
-
-        # 显示定时事件
-        scheduled_events = battle.get("scheduled_events", [])
-        if scheduled_events:
-            event_lines = TimelineFormatter._format_scheduled_events(
-                scheduled_events, current_time
+        action_lines = TimelineFormatter._format_actions(battle, current_time)
+        if action_lines:
+            lines.append(DIVIDER)
+            lines.extend(
+                clip_lines(action_lines, more_hint=reply.render("timeline_more_hint"))
             )
+        else:
+            lines.append(reply.render("empty_timeline"))
+
+        event_lines = TimelineFormatter._format_scheduled_events(
+            battle.get("scheduled_events", []), current_time
+        )
+        if event_lines:
+            lines.append(DIVIDER)
+            lines.append(title(reply.render("scheduled_events_title")))
             lines.extend(event_lines)
 
-        # 添加额外信息（如弹药）
         if extra_info:
-            lines.append(TimelineFormatter._format_extra_info(extra_info))
+            extra = TimelineFormatter._format_extra_info(extra_info)
+            if extra:
+                lines.append(extra)
 
-        return "\n".join(lines)
-
-    @staticmethod
-    def _get_empty_message() -> str:
-        """获取空时间线消息"""
-        from ..adapter.message import ReplyManager
-
-        reply = ReplyManager("battle")
-        return reply.render("empty_timeline")
+        return wrap("\n".join(lines))
 
     @staticmethod
-    def _get_header(name: str) -> str:
-        """获取时间线头部"""
-        from ..adapter.message import ReplyManager
+    def _format_actions(battle: dict, current_time: float) -> list[str]:
+        """每个参与中角色的最新未完成行动，按结束时间排序，每个行动两行"""
+        participants = battle.get("participants", {})
+        latest: dict[tuple[str, str], tuple[float, dict]] = {}
+        for key, actions in (battle.get("timeline") or {}).items():
+            time_point = float(key)
+            if time_point < current_time:
+                continue
+            for action in actions:
+                owner = (action.get("user_id", ""), action.get("character_name", ""))
+                if owner not in latest or time_point > latest[owner][0]:
+                    latest[owner] = (time_point, action)
 
-        reply = ReplyManager("battle")
-        return reply.render("timeline_header", name=name)
-
-    @staticmethod
-    def _get_time_info(current_time: float, max_time: float) -> str:
-        """获取时间信息"""
-        from ..adapter.message import ReplyManager
-
-        reply = ReplyManager("battle")
-        current = game_config.round_value(current_time, "time")
-        max_val = game_config.round_value(max_time, "time")
-        return reply.render("timeline_current_max_time", current=current, max=max_val)
-
-    @staticmethod
-    def _format_action(action: dict, attribute_label: str) -> list[str]:
-        """
-        格式化单个行动
-
-        Args:
-            action: 行动字典
-            attribute_label: 属性标签（"属性"或"武器"）
-
-        Returns:
-            List[str]: 格式化后的行列表
-        """
-        lines = []
-
-        # 基础信息
-        start_time = game_config.round_value(action.get("start_time", 0), "time")
-        lead_time = game_config.round_value(action.get("lead_time", 0), "time")
-        impact_value = game_config.round_value(action.get("impact_value", 0), "impact")
-
-        char_name = action.get("character_name", "未知")
-        lines.append(f"  [{char_name}]")
-        lines.append(f"    起始: {start_time}t | 前摇: {lead_time}t")
-
-        # 属性/武器显示
-        if action.get("using_weapon"):
-            # 武器模式
-            weapon_name = action.get("weapon", "")
-            lines.append(f"    武器: {weapon_name} | 影响: {impact_value}")
-        else:
-            # 普通属性模式
-            attr_used = action.get("attribute_used", "")
-            lines.append(f"    {attribute_label}: {attr_used} | 影响: {impact_value}")
-
-        # 备注
-        if action.get("notes"):
-            lines.append(f"    {action['notes']}")
-
+        lines: list[str] = []
+        for (user_id, char_name), (time_point, action) in sorted(
+            latest.items(), key=lambda kv: kv[1][0]
+        ):
+            status = participants.get(user_id, {}).get(char_name, {}).get("status")
+            if status != "参与中":
+                continue
+            lines.extend(TimelineFormatter._format_action(time_point, action))
         return lines
+
+    @staticmethod
+    def _format_action(time_point: float, action: dict) -> list[str]:
+        """
+        单个行动两行：
+            5t [游侠] 长弓 影响12
+              2.5t起 前摇2.5t 齐射
+        """
+        used = (
+            action.get("weapon", "")
+            if action.get("using_weapon")
+            else action.get("attribute_used", "")
+        )
+        impact = game_config.round_value(action.get("impact_value", 0) or 0, "impact")
+        first = (
+            f"{_time(time_point)}t [{action.get('character_name', '未知')}] "
+            f"{used} 影响{impact}"
+        )
+        second = (
+            f"  {_time(action.get('start_time', 0) or 0)}t起 "
+            f"前摇{_time(action.get('lead_time', 0) or 0)}t"
+        )
+        if action.get("notes"):
+            second += f" {action['notes']}"
+        return [first, second]
+
+    @staticmethod
+    def _event_text(event: dict) -> str:
+        return event.get("action_description") or event.get("callback_message", "")
 
     @staticmethod
     def _format_scheduled_events(
         scheduled_events: list[dict], current_time: float
     ) -> list[str]:
-        """格式化定时事件"""
-        lines = []
-
-        # 时间模式事件
-        time_based_events = [
+        """时间模式按到期时间排序并标注剩余时间；次数模式显示剩余次数"""
+        reply = _reply()
+        timed = sorted(
+            (
+                e
+                for e in scheduled_events
+                if e.get("mode") == "time_based"
+                and e.get("end_time") is not None
+                and current_time < e["end_time"]
+            ),
+            key=lambda e: e["end_time"],
+        )
+        counted = [
             e
             for e in scheduled_events
-            if e.get("mode") == "time_based"
-            and e.get("end_time")
-            and current_time < e.get("end_time", 0)
+            if e.get("mode") == "count_based" and (e.get("remaining_count") or 0) > 0
         ]
 
-        # 次数模式事件
-        count_based_events = [
-            e
-            for e in scheduled_events
-            if e.get("mode") == "count_based"
-            and e.get("remaining_count") is not None
-            and e.get("remaining_count") > 0
+        lines = [
+            reply.render(
+                "scheduled_time_event",
+                time=_time(e["end_time"]),
+                desc=TimelineFormatter._event_text(e),
+                remaining=_time(e["end_time"] - current_time),
+            )
+            for e in timed
         ]
-
-        if time_based_events or count_based_events:
-            lines.append("\n【定时事件】")
-
-            # 时间模式事件
-            for event in time_based_events:
-                event_desc = event.get("callback_message") or event.get(
-                    "action_description", ""
-                )
-                end_time = game_config.round_value(event.get("end_time", 0), "time")
-                lines.append(f"  {end_time}t - {event_desc}")
-
-            # 次数模式事件
-            for event in count_based_events:
-                event_desc = event.get("callback_message") or event.get(
-                    "action_description", ""
-                )
-                remaining = event.get("remaining_count", 0)
-                lines.append(f"  ×{remaining} - {event_desc}")
-
+        lines.extend(
+            reply.render(
+                "scheduled_count_event",
+                count=e["remaining_count"],
+                desc=TimelineFormatter._event_text(e),
+            )
+            for e in counted
+        )
         return lines
 
     @staticmethod
     def _format_extra_info(extra_info: dict) -> str:
         """格式化额外信息（如弹药）"""
-        lines = []
+        ammo = extra_info.get("ammo")
+        if isinstance(ammo, dict):
+            return f"弹药：{ammo.get('current', 0)}/{ammo.get('max', 0)}"
+        if isinstance(ammo, str):
+            return ammo
+        return ""
 
-        # 弹药信息
-        if "ammo" in extra_info:
-            ammo = extra_info["ammo"]
-            if isinstance(ammo, dict):
-                current = ammo.get("current", 0)
-                max_ammo = ammo.get("max", 0)
-                lines.append(f"\n[弹药: {current}/{max_ammo}]")
-            elif isinstance(ammo, str):
-                lines.append(f"\n[{ammo}]")
 
-        return "\n".join(lines)
+def _reply():
+    from ..adapter.message import ReplyManager
+
+    return ReplyManager("battle")
+
+
+def _time(value: float) -> int | float:
+    return game_config.round_value(float(value), "time")
+
+
+def describe_expiry(event: dict | None) -> str:
+    """
+    描述定时事件何时失效，用于添加 buff/资源修正/护盾后的回显
+
+    Args:
+        event: scheduler.schedule_event 的返回值；None 表示没有进行中的战斗、未调度
+    """
+    from ..adapter.message import ReplyManager
+
+    schedule_reply = ReplyManager("schedule")
+    if not event:
+        return schedule_reply.render("not_scheduled")
+    if event.get("mode") == "count_based":
+        return schedule_reply.render(
+            "expires_after_count", count=event.get("remaining_count")
+        )
+    return schedule_reply.render(
+        "expires_at", time=game_config.round_value(event.get("end_time", 0), "time")
+    )
 
 
 # 全局格式化器实例

@@ -57,19 +57,16 @@ class BattleModule:
             usage="[属性/wp] [时间]t/[影响值] (笔记)",
             summary="战斗系统",
             detail=(
-                "<属性> <时间>t (笔记) - 添加战斗行动(时间模式)\n"
-                "<属性> <影响值> (笔记) - 添加战斗行动(影响值模式)\n"
-                "wp <时间>t/<影响值> (笔记) - 使用武器进行战斗\n"
-                "wp re - 装填火力武器\n"
-                "<时间t> <属性> <时间>t/<影响值> - 在指定时间插入行动\n"
-                "undo - 撤销最后行动\n"
-                "\n"
-                "增幅武器: 时间模式(t)和影响值模式(数字)都支持\n"
-                "火力武器: 只支持影响值模式(数字)\n"
-                "类型为其他的武器: 不可以使用wp指令\n"
-                "\n"
-                "公式: 影响值 = 属性 × 时间 / 20\n"
-                "注：时间线管理请使用 .tl 指令"
+                ".bt 属性 时间t (笔记)：按时间行动\n"
+                ".bt 属性 影响值 (笔记)：按影响值行动\n"
+                ".bt wp 时间t/影响值：用武器行动\n"
+                ".bt wp re：装填火力武器\n"
+                ".bt 5t 属性 3t：在5t处插入行动\n"
+                ".bt undo：撤销最后一个行动\n"
+                "影响值=属性×时间/20\n"
+                "增幅武器：时间/影响值都可用\n"
+                "火力武器：只能用影响值\n"
+                "时间线管理：.help tl"
             ),
         )
 
@@ -83,8 +80,7 @@ class BattleModule:
         storage_key = f"{conversation_id}"
 
         if not ctx.args:
-            # 显示帮助
-            ctx.send(self.reply.render("help"))
+            ctx.send(self.help_entry.format())
             return True
 
         # 解析命令
@@ -157,7 +153,17 @@ class BattleModule:
             ctx.send(result)
 
         else:
-            ctx.send(self.system_reply.render("command_not_found", command=ctx.command))
+            suggestion = AttributeResolver.suggest(ctx.args[0])
+            if suggestion:
+                ctx.send(
+                    self.reply.render(
+                        "unknown_input_suggest",
+                        input=ctx.args[0],
+                        suggestion=suggestion,
+                    )
+                )
+            else:
+                ctx.send(self.reply.render("unknown_input", input=ctx.args[0]))
 
         return True
 
@@ -497,13 +503,37 @@ class BattleModule:
             storage_key, user_id, character_name, is_group, decrement=True
         )
 
-        # 如果有到期事件，将消息添加到返回结果中
-        timeline_result = self._format_timeline_display(battle)
-        if executed:
-            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
-            return timeline_result + event_msgs
+        headline = self.reply.render(
+            "action_added",
+            name=character_name,
+            used=attribute,
+            impact=formatted_impact,
+            end=new_time_point,
+        )
+        return self._battle_result(battle, executed, headline)
 
-        return timeline_result
+    def _battle_result(
+        self,
+        battle: dict,
+        executed: list[str],
+        headline: str | None = None,
+        attribute_label: str = "属性",
+        extra_info: dict | None = None,
+    ) -> str:
+        """战斗指令的回复：到期提醒放最前（消息过长被 QQ 折叠时也能看到），然后是本次行动和时间线"""
+        parts = []
+        if executed:
+            parts.append(
+                self.reply.render("expired_events", events="\n".join(executed))
+            )
+        if headline:
+            parts.append(headline)
+        parts.append(
+            self._format_timeline_display(
+                battle, attribute_label=attribute_label, extra_info=extra_info
+            )
+        )
+        return "\n".join(parts)
 
     async def _process_scheduled_events(
         self,
@@ -655,13 +685,21 @@ class BattleModule:
             storage_key, user_id, character_name, is_group, decrement=False
         )
 
-        # 如果有到期事件，将消息添加到返回结果中
-        timeline_result = self._format_timeline_display(battle)
-        if executed:
-            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
-            return timeline_result + event_msgs
-
-        return timeline_result
+        if found_ongoing:
+            headline = self.reply.render(
+                "action_interrupted",
+                name=character_name,
+                time=self._format_time(insert_time_val),
+            )
+        else:
+            headline = self.reply.render(
+                "action_added",
+                name=character_name,
+                used=attribute,
+                impact=formatted_impact,
+                end=new_time_point,
+            )
+        return self._battle_result(battle, executed, headline)
 
     async def _undo_action(self, storage_key: str, user_id: str, is_group: bool) -> str:
         """
@@ -721,16 +759,11 @@ class BattleModule:
             storage_key, user_id, character_name, is_group, decrement=False
         )
 
-        # 格式化输出当前时间轴状态
-        timeline_result = self._format_timeline_display(battle)
-
-        # 返回结果
-        result = self.reply.render("action_undone", name=character_name)
-        if executed:
-            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
-            result += event_msgs
-        result += "\n" + timeline_result
-        return result
+        return self._battle_result(
+            battle,
+            executed,
+            self.reply.render("action_undone", name=character_name),
+        )
 
     def _format_timeline_display(
         self, battle: dict, attribute_label: str = "属性", extra_info: dict = None
@@ -1171,17 +1204,16 @@ class BattleModule:
             storage_key, user_id, character_name, is_group, decrement=True
         )
 
-        # 格式化输出 - 使用统一的 timeline 格式化器
-        timeline_result = self._format_timeline_display(
-            battle, attribute_label="武器", extra_info=extra_info
+        headline = self.reply.render(
+            "action_added",
+            name=character_name,
+            used=weapon_name,
+            impact=formatted_impact,
+            end=new_time_point,
         )
-
-        # 如果有到期事件，将消息添加到返回结果中
-        if executed:
-            event_msgs = "\n【到期事件】\n" + "\n".join(executed)
-            return timeline_result + event_msgs
-
-        return timeline_result
+        return self._battle_result(
+            battle, executed, headline, attribute_label="武器", extra_info=extra_info
+        )
 
 
 battle_module = BattleModule()

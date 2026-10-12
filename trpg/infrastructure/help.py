@@ -15,6 +15,8 @@ Help 注册表模块，提供统一的帮助信息管理和查询。
 
 from dataclasses import dataclass
 
+from .text_style import title, wrap
+
 
 @dataclass
 class HelpEntry:
@@ -33,6 +35,15 @@ class HelpEntry:
     summary: str
     detail: str = ""
 
+    def format(self) -> str:
+        """详细帮助文本：【.模块 简介】+ 详细说明，按手机屏幕宽度换行"""
+        lines = [title(f".{self.module} {self.summary}")]
+        if self.detail:
+            lines.append(self.detail)
+        elif self.usage:
+            lines.append(f"用法：.{self.module} {self.usage}")
+        return wrap("\n".join(lines))
+
 
 class HelpRegistry:
     """
@@ -41,14 +52,17 @@ class HelpRegistry:
     设计目标：动态获取指令前缀，使帮助信息与实际路由配置同步。
 
     使用示例:
-        registry = HelpRegistry(header="=== TimelineTRPG ===", footer="使用 .help <模块> 查看详细帮助")
+        registry = HelpRegistry(header="【TimelineTRPG】", footer="提示：.help 指令名 查看用法")
         registry.register(HelpEntry("echo", "<消息>", "回显消息", "..."))
     """
 
-    def __init__(self, header: str = "", footer: str = "", router=None):
+    def __init__(
+        self, header: str = "", footer: str = "", router=None, empty_text: str = ""
+    ):
         self._entries: dict[str, HelpEntry] = {}
         self.header: str = header
         self.footer: str = footer
+        self.empty_text: str = empty_text
         self._router = router  # 可选的 Router 实例，用于动态获取指令前缀
 
     def register(self, entry: HelpEntry) -> None:
@@ -62,6 +76,15 @@ class HelpRegistry:
     def get(self, module: str) -> HelpEntry | None:
         """查询指定模块的帮助条目。"""
         return self._entries.get(module)
+
+    def find(self, *names: str) -> HelpEntry | None:
+        """按候选名依次查找（不区分大小写），用于 TLsetup/resmod 等别名"""
+        lowered = {key.lower(): entry for key, entry in self._entries.items()}
+        for name in names:
+            entry = lowered.get(name.lower())
+            if entry is not None:
+                return entry
+        return None
 
     def has(self, module: str) -> bool:
         return module in self._entries
@@ -90,27 +113,26 @@ class HelpRegistry:
 
     def format_summary(self) -> str:
         """
-        生成总帮助概览文本，每个模块一行。
-        动态获取指令前缀，确保与实际配置同步。
+        生成总帮助概览文本，每个指令一行（按注册顺序，不补空格对齐）。
+        只列出 Router 中实际可用的指令。
 
         格式:
-            .echo <消息>    - 回显消息
-            .r <表达式>     - 掷骰子
+            【TimelineTRPG】
+            .r 掷骰子
+            .ex 属性检定
+            提示：.help 指令名 查看用法
         """
-        available_commands = self.get_available_commands()
+        available_commands = set(self.get_available_commands())
         if not available_commands:
-            return "暂无可用指令。"
+            return self.empty_text
 
         lines: list[str] = []
         if self.header:
             lines.append(self.header)
 
-        # 首先显示所有已注册且有帮助的指令
-        for command in sorted(available_commands):
-            entry = self._entries.get(command)
-            if entry:
-                # 动态添加前缀
-                lines.append(f"  .{command} {entry.usage:<20} - {entry.summary}")
+        for command, entry in self._entries.items():
+            if command in available_commands:
+                lines.append(f".{command} {entry.summary}")
 
         if self.footer:
             lines.append(self.footer)
@@ -118,35 +140,11 @@ class HelpRegistry:
 
     def format_detail(self, module: str) -> str | None:
         """
-        生成指定模块的详细帮助文本。
+        生成指定模块的详细帮助文本（按手机屏幕宽度换行）。
 
         如果模块未注册，返回 None。
         """
-        # 首先检查是否有 help 条目
-        entry = self._entries.get(module)
+        entry = self.find(module)
         if entry is None:
             return None
-
-        # 构建详细帮助，动态添加前缀
-        if entry.detail:
-            # 如果有详细帮助，直接使用，但确保格式正确
-            return f".{module}\n{entry.detail}"
-        else:
-            # 如果没有详细帮助，使用总结信息
-            return f".{module} {entry.usage} - {entry.summary}"
-
-    def format_all(self) -> str:
-        """
-        生成完整帮助文本（概览 + 所有模块的详细帮助）。
-        """
-        if not self._entries:
-            return "暂无可用指令。"
-
-        parts: list[str] = [self.format_summary()]
-        for entry in self._entries.values():
-            # 显示每个模块的详细帮助，动态添加前缀
-            if entry.detail:
-                parts.append(f"\n--- .{entry.module} ---\n{entry.detail}")
-            else:
-                parts.append(f"\n--- .{entry.module} ---\n{entry.summary}")
-        return "\n".join(parts)
+        return entry.format()

@@ -118,4 +118,4 @@ def test_negotiation_without_target_does_not_crash(make_ctx, run):
 
     ctx = make_ctx("neg")
     run(negotiation_module.neg(ctx))
-    assert "未设定" in ctx.get_reply_texts()[0]
+    assert "没有设定交涉对象" in ctx.get_reply_texts()[0]

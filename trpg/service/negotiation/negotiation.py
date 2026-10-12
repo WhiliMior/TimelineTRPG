@@ -36,9 +36,9 @@ class NegotiationModule:
             usage="[rp评分] [对象等级] [对象智力%]",
             summary="交涉检定",
             detail=(
-                "{RP评分} - 进行交涉检定\n"
-                "{对象等级} {对象智力%} - 设定交涉对象\n"
-                "{RP评分} {对象等级} {对象智力%} - 设定交涉对象并交涉"
+                ".neg RP：交涉检定\n"
+                ".neg 等级 智力%：设定交涉对象\n"
+                ".neg RP 等级 智力%：设定并检定"
             ),
         )
 
@@ -91,7 +91,11 @@ class NegotiationModule:
                 self._set_negotiation_target(
                     conversation_id, target_level, target_intelligence, session_type
                 )
-                response = self.reply.render("negotiation_target_set")
+                response = self.reply.render(
+                    "negotiation_target_set",
+                    level=target_level,
+                    intelligence=target_intelligence,
+                )
                 ctx.send(response)
             except ValueError:
                 response = self.reply.render("invalid_target_params")
@@ -118,10 +122,7 @@ class NegotiationModule:
                 ctx.send(response)
 
         else:
-            response = self.system_reply.render(
-                "command_not_found", command=ctx.command
-            )
-            ctx.send(response)
+            ctx.send(self.reply.render("invalid_params"))
 
         return True
 
@@ -186,20 +187,20 @@ class NegotiationModule:
         # 掷骰
         roll = random.randint(1, 100)
 
-        # 构建详细的交涉反馈
-        lines = []
-        lines.append(f"[{character_name}]进行交涉检定")
-        lines.append(f"RP: {rp_grade} | 交涉加成: {negotiation_value}")
-        lines.append(f"目标: 等级{target_level} | 智力{target_intelligence}%")
-        lines.append(f"成功率: {success_rate_display}%")
-
-        # 判断成功/失败 (roll <= success_rate 为成功)
-        if roll <= success_rate:
-            lines.append(f"投点: {roll}/{success_rate_display}% 🎉交涉成功!")
-        else:
-            lines.append(f"投点: {roll}/{success_rate_display}% ❌交涉失败")
-
-        return "\n".join(lines)
+        passed = roll <= success_rate
+        return self.reply.render(
+            "negotiation_result",
+            character=character_name,
+            rp=f"{rp_grade:g}",
+            bonus=negotiation_value,
+            level=target_level,
+            intelligence=target_intelligence,
+            roll=roll,
+            success_rate=success_rate_display,
+            outcome=self.reply.render(
+                "negotiation_success" if passed else "negotiation_failure"
+            ),
+        )
 
     def _calculate_success_rate(
         self,

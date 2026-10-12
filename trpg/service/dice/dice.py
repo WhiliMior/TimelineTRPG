@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.text_style import wrap
 
 # 默认游戏设置
 DEFAULT_SETTINGS = {
@@ -204,10 +205,7 @@ class RollDiceModule:
             usage="[表达式]",
             summary="掷骰子",
             detail=(
-                "默认掷骰(d100)\n"
-                "{表达式} - 掷骰表达式，如 3d6+2\n"
-                "{数字} - 掷1-{数字}之间的随机数\n"
-                "d{数字} - 掷1个{数字}面骰"
+                ".r：掷d100\n.r 3d6+2：按表达式掷骰\n.r 50：掷1~50\n.r d20：掷1个20面骰"
             ),
         )
 
@@ -219,9 +217,10 @@ class RollDiceModule:
         .r 100 - 生成 1-100 之间的随机数
         .r d100 - 掷 1 个 100 面骰
         """
+        user = ctx.sender_name or ctx.sender_id or "?"
         if not ctx.args:
             result = random.randint(1, 100)
-            ctx.send(self.reply.render("default_roll", result=result))
+            ctx.send(self.reply.render("default_roll", user=user, result=result))
             return True
 
         expression = "".join(ctx.args)
@@ -237,18 +236,22 @@ class RollDiceModule:
         total = _format_number(result.total, result.decimals)
         if "d" not in expression.lower():
             response = self.reply.render(
-                "rd_result", expression=expression, result=total
+                "rd_result", user=user, expression=expression, result=total
             )
         elif breakdown:
             response = self.reply.render(
-                "roll_result", expression=expression, result=total, rolls=breakdown
+                "roll_result",
+                user=user,
+                expression=expression,
+                result=total,
+                rolls=breakdown,
             )
         else:
             response = self.reply.render(
-                "roll_result_single", expression=expression, result=total
+                "roll_result_single", user=user, expression=expression, result=total
             )
 
-        ctx.send(response)
+        ctx.send(wrap(response))
         return True
 
 

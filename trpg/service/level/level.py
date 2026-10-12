@@ -11,6 +11,7 @@
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.text_style import num
 
 
 class LevelModule:
@@ -32,12 +33,7 @@ class LevelModule:
             module="lv",
             usage="[等级|+/-等级]",
             summary="等级管理",
-            detail=(
-                "- 查询当前等级\n"
-                "{等级} - 设置等级\n"
-                "+{数值} - 增加等级\n"
-                "-{数值} - 减少等级"
-            ),
+            detail=(".lv：查看等级\n.lv 5：设为5级\n.lv +1 / .lv -1：升降等级"),
         )
 
     async def lv(self, ctx: CommandContext) -> bool:
@@ -95,7 +91,7 @@ class LevelModule:
         name = active_char.get("name", "未知")
         level = active_char.get("data", {}).get("等级", 1)
 
-        return self.reply.render("level_query", name=name, level=level)
+        return self.reply.render("level_query", name=name, level=num(level))
 
     async def _set_level(self, user_id: str, level: int) -> str:
         """设置等级"""
@@ -124,9 +120,15 @@ class LevelModule:
                 characters[i] = active_char
                 break
 
-        await char_module._save_characters(user_id, characters)
+        if not await char_module._save_characters(user_id, characters):
+            return self.reply.render("save_failed")
 
-        return self.reply.render("level_adjusted", old=old_level, new=level)
+        return self.reply.render(
+            "level_adjusted",
+            name=active_char.get("name", ""),
+            old=num(old_level),
+            new=num(level),
+        )
 
     async def _adjust_level(self, user_id: str, delta: int) -> str:
         """调整等级"""
@@ -160,7 +162,12 @@ class LevelModule:
         if not await char_module._save_characters(user_id, characters):
             return self.reply.render("save_failed")
 
-        return self.reply.render("level_adjusted", old=old_level, new=new_level)
+        return self.reply.render(
+            "level_adjusted",
+            name=active_char.get("name", ""),
+            old=num(old_level),
+            new=num(new_level),
+        )
 
 
 # 创建模块实例
