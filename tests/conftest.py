@@ -109,6 +109,11 @@ SAMPLE_CHARACTER = (
 
 
 @pytest.fixture
+def sample_character() -> str:
+    return SAMPLE_CHARACTER
+
+
+@pytest.fixture
 def make_ctx():
     """构造 CommandContext；group_id 为空字符串表示私聊（与 AstrBot 行为一致）"""
     from timeline_trpg.trpg.adapter.command_context import CommandContext
