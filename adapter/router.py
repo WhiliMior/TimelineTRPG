@@ -121,6 +121,14 @@ class Router:
         )
 
         if command not in self.routes:
+            # 手机输入法常把首字母自动大写（.R / .Bt）
+            folded = next(
+                (name for name in self.routes if name.lower() == command.lower()),
+                None,
+            )
+            if folded is not None:
+                command = folded
+        if command not in self.routes:
             logger.warning(
                 f"[Dispatch] Command '{command}' not found in routes: {list(self.routes.keys())}"
             )

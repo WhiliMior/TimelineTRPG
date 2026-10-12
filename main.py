@@ -23,6 +23,7 @@ from .trpg.infrastructure.command_dispatcher import command_dispatcher
 from .trpg.infrastructure.config.game_config import game_config
 from .trpg.infrastructure.help import HelpEntry, HelpRegistry
 from .trpg.infrastructure.storage import StorageBackend
+from .trpg.infrastructure.suggestion import closest
 from .trpg.service.battle.battle import battle_module
 from .trpg.service.battle.timeline import timeline_module
 from .trpg.service.buff.buff import buff_module
@@ -66,9 +67,10 @@ class TimelineTRPG(Star):
         self.router = Router()
         self.system_reply = ReplyManager("system")
         self.help_registry = HelpRegistry(
-            header="=== TimelineTRPG ===",
-            footer="使用 .help <模块> 查看模块详细帮助",
+            header=self.system_reply.render("help_header"),
+            footer=self.system_reply.render("help_footer"),
             router=self.router,  # 传递 Router 实例，用于动态获取指令前缀
+            empty_text=self.system_reply.render("help_empty"),
         )
         self.module_instances: list = []
         self.module_instances.append(roll_dice_module)
@@ -139,9 +141,10 @@ class TimelineTRPG(Star):
         子模块需要暴露 help_entry 属性（返回 HelpEntry 实例）。
         """
         for module in self.module_instances:
-            entry = getattr(module, "help_entry", None)
-            if isinstance(entry, HelpEntry):
-                self.help_registry.register(entry)
+            for attr in ("help_entry", "help_entry_setup"):
+                entry = getattr(module, attr, None)
+                if isinstance(entry, HelpEntry):
+                    self.help_registry.register(entry)
         logger.info(
             f"[{PLUGIN_NAME}] 帮助系统已加载: {self.help_registry.list_modules()}"
         )
@@ -163,9 +166,9 @@ class TimelineTRPG(Star):
         async def wrapped(ctx: CommandContext) -> bool:
             # 如果参数是 "help" 或以 "help" 开头，显示该模块的帮助
             if ctx.args and ctx.args[0].lower() == "help":
-                entry = self_ref.help_registry.get(command)
+                entry = self_ref.help_registry.find(ctx.command, command)
                 if entry:
-                    ctx.send(entry.detail or entry.summary)
+                    ctx.send(entry.format())
                     return True
                 # 没有注册 help_entry，回退到子模块自行处理
                 ctx.args = ctx.args[1:]  # 去掉 "help"
@@ -196,17 +199,13 @@ class TimelineTRPG(Star):
                 result = await command_dispatcher.dispatch("chr_reset", ctx)
 
                 # command_dispatcher.dispatch 返回 None 表示未找到处理器
-                if result is None and not ctx.has_reply():
-                    ctx.send("角色重置失败：未找到重置处理器")
-                    return True
-
                 # batch_command 层的处理函数返回结果文本但不会自行发送，
-                # 这里负责将转发结果回复给用户
+                # 这里负责将转发结果回复给用户；None 表示处理器未注册
                 if not ctx.has_reply():
                     if result:
                         ctx.send(result)
                     else:
-                        ctx.send("角色重置失败，请确保您有激活的角色")
+                        ctx.send(self.system_reply.render("reset_unavailable"))
                 return True
 
             # 其他情况委托给 service 层
@@ -225,12 +224,19 @@ class TimelineTRPG(Star):
             ctx.send(self.help_registry.format_summary())
             return True
 
-        module_name = ctx.args[0].lower()
+        module_name = ctx.args[0].lstrip(".。/")
         detail = self.help_registry.format_detail(module_name)
 
         if detail is None:
-            ctx.send(self.system_reply.render("help_not_found", module=module_name))
-            ctx.send(self.help_registry.format_summary())
+            suggestion = closest(module_name, self.help_registry.list_modules())
+            if suggestion:
+                ctx.send(
+                    self.system_reply.render(
+                        "help_suggestion", module=module_name, suggestion=suggestion
+                    )
+                )
+            else:
+                ctx.send(self.system_reply.render("help_not_found", module=module_name))
             return True
 
         ctx.send(detail)
@@ -254,7 +260,7 @@ class TimelineTRPG(Star):
 
         match = re.match(r"^[.。/](\w+)\b\s*(.*)$", message_str)
         if not match:
-            yield event.plain_result("指令格式错误")
+            yield event.plain_result(self.system_reply.render("format_error"))
             return
 
         command = match.group(1)  # 保留原始大小写
@@ -282,12 +288,16 @@ class TimelineTRPG(Star):
                     f"[{PLUGIN_NAME}] 指令处理失败: command={command}, "
                     f"args={args}, sender={ctx.sender_name}, group={ctx.group_id}"
                 )
-                yield event.plain_result("指令处理失败")
+                yield event.plain_result(
+                    self.system_reply.render("command_failed", command=command)
+                )
                 return
 
             if not ctx.has_reply():
                 logger.debug(f"[{PLUGIN_NAME}] 指令无回复: command={command}")
-                yield event.plain_result("指令执行完成")
+                yield event.plain_result(
+                    self.system_reply.render("no_reply", command=command)
+                )
                 return
 
             for payload in ctx.reply_payloads:
@@ -315,7 +325,9 @@ class TimelineTRPG(Star):
                                 logger.warning(f"[{PLUGIN_NAME}] 删除临时图片失败: {e}")
                     except Exception as e:
                         logger.error(f"[{PLUGIN_NAME}] 发送图片失败: {e}")
-                        yield event.plain_result(f"图片发送失败: {str(e)}")
+                        yield event.plain_result(
+                            self.system_reply.render("image_failed")
+                        )
                 else:
                     # 普通文本消息
                     yield event.plain_result(payload.text)
@@ -379,8 +391,16 @@ class TimelineTRPG(Star):
         return args_str.split()
 
     async def _handle_unknown_command(self, ctx: CommandContext) -> bool:
-        """处理未知指令"""
-        ctx.send(self.system_reply.render("command_not_found", command=ctx.command))
+        """处理未知指令，拼写相近时给出建议"""
+        suggestion = closest(ctx.command, self.router.list_commands())
+        if suggestion:
+            ctx.send(
+                self.system_reply.render(
+                    "command_suggestion", command=ctx.command, suggestion=suggestion
+                )
+            )
+        else:
+            ctx.send(self.system_reply.render("command_not_found", command=ctx.command))
         return True
 
     async def initialize(self):

@@ -260,11 +260,21 @@
     "save_failed": "保存失败，请稍后重试"
   },
   "system": {
-    "command_not_found": "未知指令: {command}，使用 .help 查看可用指令",
+    "command_not_found": "未知指令：.{command}\n提示：.help 查看全部指令",
     "internal_error": "指令 .{command} 执行出错，请稍后重试\n如果反复出现，请联系管理员查看日志",
-    "help_not_found": "未找到模块 \"{module}\" 的帮助信息，使用 .help 查看可用模块",
+    "help_not_found": "没有 .{module} 的帮助\n提示：.help 查看全部指令",
     "template_missing": "操作未完成，请稍后重试",
-    "data_corrupted": "存档文件损坏，已自动备份\n请联系管理员恢复数据后再试"
+    "data_corrupted": "存档文件损坏，已自动备份\n请联系管理员恢复数据后再试",
+    "command_suggestion": "未知指令：.{command}\n提示：你是不是想输入 .{suggestion}",
+    "help_suggestion": "没有 .{module} 的帮助\n提示：你是不是想查 .help {suggestion}",
+    "help_header": "【TimelineTRPG】",
+    "help_footer": "提示：.help 指令名 查看用法",
+    "help_empty": "暂无可用指令",
+    "command_failed": ".{command} 没有完成\n提示：.help {command} 查看用法",
+    "no_reply": ".{command} 已执行，没有需要显示的内容",
+    "format_error": "指令格式不对\n提示：.help 查看全部指令",
+    "image_failed": "图片发送失败，请稍后重试",
+    "reset_unavailable": "角色重置暂时不可用\n提示：请联系管理员重载插件"
   },
   "character_reset": {
     "reset_success": "【角色重置】{name}\n{details}",
