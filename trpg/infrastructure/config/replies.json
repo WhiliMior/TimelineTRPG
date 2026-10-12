@@ -259,9 +259,10 @@
   },
   "system": {
     "command_not_found": "未知指令: {command}，使用 .help 查看可用指令",
-    "internal_error": "内部错误: {error}",
+    "internal_error": "指令 .{command} 执行出错，请稍后重试\n如果反复出现，请联系管理员查看日志",
     "help_not_found": "未找到模块 \"{module}\" 的帮助信息，使用 .help 查看可用模块",
-    "template_missing": "操作未完成，请稍后重试"
+    "template_missing": "操作未完成，请稍后重试",
+    "data_corrupted": "存档文件损坏，已自动备份\n请联系管理员恢复数据后再试"
   },
   "character_reset": {
     "reset_success": "=== 角色状态重置完成 ===\n{details}",

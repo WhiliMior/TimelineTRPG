@@ -5,11 +5,14 @@
 这是外部适配层 (adapter/)，仅负责消息路由
 """
 
+import asyncio
 import inspect
 import logging
 from collections.abc import Callable
 
 from ..trpg.adapter.command_context import CommandContext
+from ..trpg.adapter.message import ReplyManager
+from ..trpg.infrastructure.storage import StorageCorruptedError
 
 # 创建 adapter 层专用的 logger
 logger = logging.getLogger("TimelineTRPG.adapter")
@@ -31,6 +34,10 @@ class Router:
     def __init__(self):
         self.routes: dict[str, Callable] = {}
         self.default_handler: Callable | None = None
+        self._system_reply = ReplyManager("system")
+        # 所有指令串行执行：读-改-写跨越多个存储文件（角色、时间线、其他玩家的到期回调），
+        # 按文件加锁无法覆盖整条指令
+        self._dispatch_lock = asyncio.Lock()
 
     def register(self, command: str, handler: Callable) -> None:
         """
@@ -102,6 +109,10 @@ class Router:
         Raises:
             ValueError: 如果处理函数返回非预期值
         """
+        async with self._dispatch_lock:
+            return await self._dispatch(ctx)
+
+    async def _dispatch(self, ctx: CommandContext) -> bool:
         command = ctx.command
 
         # 记录指令分发信息
@@ -158,18 +169,24 @@ class Router:
                 # 非 bool/None 返回值视为成功
                 return True
 
-        except Exception as e:
-            # 记录处理函数抛出的异常
-            import traceback
-
+        except StorageCorruptedError as e:
             logger.error(
-                f"[Handler Error] command={ctx.command}, handler={handler.__name__}, error={e}\n"
-                f"  traceback: {traceback.format_exc(limit=5)}"
+                f"[Handler Error] command={ctx.command}, 存档损坏: {e.path}, "
+                f"备份: {e.backup_path}"
             )
+            ctx.clear_replies()
+            ctx.send(self._system_reply.render("data_corrupted"))
+            return True
 
-            # 向上下文添加错误回复
-            ctx.send(f"指令处理出错: {e}")
-            return False
+        except Exception as e:
+            # 原始异常只写日志，不发给玩家
+            logger.exception(
+                f"[Handler Error] command={ctx.command}, args={ctx.args}, "
+                f"handler={getattr(handler, '__name__', handler)}, error={e}"
+            )
+            ctx.clear_replies()
+            ctx.send(self._system_reply.render("internal_error", command=ctx.command))
+            return True
 
     def list_commands(self) -> list:
         """列出所有已注册的指令"""

@@ -327,7 +327,7 @@ class TimelineTRPG(Star):
                 f"  traceback: {traceback.format_exc(limit=5)}"
             )
             yield event.plain_result(
-                self.system_reply.render("internal_error", error=str(e))
+                self.system_reply.render("internal_error", command=command)
             )
 
     async def _send_image(self, event: AstrMessageEvent, image_path: str):

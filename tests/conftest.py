@@ -156,6 +156,6 @@ def data_dir(tmp_path, monkeypatch):
     from timeline_trpg.trpg.infrastructure.storage import StorageBackend
 
     monkeypatch.setattr(_StarTools, "data_dir", tmp_path)
-    StorageBackend._plugin_data_dir = None
+    StorageBackend.reset_cache()
     yield tmp_path
-    StorageBackend._plugin_data_dir = None
+    StorageBackend.reset_cache()
