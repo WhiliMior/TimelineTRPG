@@ -106,9 +106,9 @@ class ResourceRecordModule:
             resource_type = self.RESOURCE_TYPE_MAPPING[command]
             if resource_type == "shield":
                 # 护盾: .rc 护盾/s {变化值} (覆盖范围) (持续时间) (f)
-                conversation_id = ctx.group_id or ctx.session_id or user_id
+                conversation_id = ctx.conversation_id
                 result = await self._handle_shield(
-                    user_id, conversation_id, ctx.args[1:], ctx.group_id is not None
+                    user_id, conversation_id, ctx.args[1:], ctx.is_group
                 )
                 ctx.send(result)
             else:
@@ -121,9 +121,9 @@ class ResourceRecordModule:
 
         # 检查是否是 s 或 护盾
         if command == "s" or command == "护盾":
-            conversation_id = ctx.group_id or ctx.session_id or user_id
+            conversation_id = ctx.conversation_id
             result = await self._handle_shield(
-                user_id, conversation_id, ctx.args[1:], ctx.group_id is not None
+                user_id, conversation_id, ctx.args[1:], ctx.is_group
             )
             ctx.send(result)
             return True

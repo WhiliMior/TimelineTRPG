@@ -78,8 +78,8 @@ class BattleModule:
         处理战斗命令
         """
         user_id = ctx.sender_id or "default"
-        conversation_id = ctx.group_id or ctx.session_id or user_id
-        is_group = ctx.group_id is not None
+        conversation_id = ctx.conversation_id
+        is_group = ctx.is_group
         storage_key = f"{conversation_id}"
 
         if not ctx.args:

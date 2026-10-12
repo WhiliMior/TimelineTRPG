@@ -21,6 +21,7 @@ import copy
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import AsyncIterator, Callable
@@ -85,6 +86,23 @@ def _safe_id(entity_id: Any) -> str:
     return str(entity_id).replace(":", "_").replace("/", "_").replace("\\", "_")
 
 
+def _battle_users(data: Any) -> set[str]:
+    """战斗时间轴文件中出现过的所有用户ID；结构异常时返回无法匹配的哨兵值"""
+    if not isinstance(data, dict):
+        return {"<invalid>"}
+    users = {str(uid) for uid in (data.get("player") or {})}
+    for battle in (data.get("battle_list") or {}).values():
+        if not isinstance(battle, dict):
+            return {"<invalid>"}
+        users.update(str(uid) for uid in (battle.get("participants") or {}))
+        for actions in (battle.get("timeline") or {}).values():
+            users.update(str(a.get("user_id")) for a in actions if isinstance(a, dict))
+        for event in battle.get("scheduled_events") or []:
+            if isinstance(event, dict):
+                users.add(str(event.get("user_id")))
+    return users
+
+
 class StorageBackend:
     """
     统一的 JSON 文件存储后端
@@ -146,6 +164,54 @@ class StorageBackend:
         )
         dir_path.mkdir(parents=True, exist_ok=True)
         return dir_path
+
+    @classmethod
+    def _session_file(
+        cls,
+        storage_type: StorageType,
+        conversation_id: str,
+        is_group: bool,
+        filename: str,
+    ) -> Path:
+        """会话级存档路径；私聊存档不存在时尝试从旧版本的错误位置迁移"""
+        path = cls._get_session_dir(storage_type, conversation_id, is_group) / filename
+        if not is_group and not path.exists():
+            cls._adopt_legacy_private_file(storage_type, conversation_id, path)
+        return path
+
+    @classmethod
+    def _adopt_legacy_private_file(
+        cls, storage_type: StorageType, conversation_id: str, path: Path
+    ) -> None:
+        """
+        旧版本把私聊数据也写进了 Group/{会话ID}/（AstrBot 私聊时 group_id 为 "" 而非 None）。
+
+        - 战斗时间轴：只有当文件里出现的玩家全是该私聊用户本人时才移动过来，
+          避免把同号群聊的数据搬走
+        - 物品重量：只是物品名到重量的记忆，复制一份即可
+        """
+        legacy = (
+            cls._get_plugin_data_dir()
+            / storage_type.value
+            / SessionType.GROUP.value
+            / _safe_id(conversation_id)
+            / path.name
+        )
+        if not legacy.is_file():
+            return
+        try:
+            if storage_type == StorageType.BATTLE_TIMELINE:
+                with open(legacy, encoding="utf-8") as f:
+                    data = json.load(f)
+                if not _battle_users(data) <= {str(conversation_id)}:
+                    return
+                os.replace(legacy, path)
+            else:
+                shutil.copy2(legacy, path)
+        except (OSError, ValueError) as e:
+            logger.warning(f"[StorageBackend] 迁移旧私聊存档失败 {legacy}: {e}")
+            return
+        logger.info(f"[StorageBackend] 已迁移旧私聊存档 {legacy} -> {path}")
 
     # ==================== 底层读写 ====================
 
@@ -317,9 +383,8 @@ class StorageBackend:
 
     @classmethod
     def _battle_timeline_path(cls, conversation_id: str, is_group: bool) -> Path:
-        return (
-            cls._get_session_dir(StorageType.BATTLE_TIMELINE, conversation_id, is_group)
-            / "data.json"
+        return cls._session_file(
+            StorageType.BATTLE_TIMELINE, conversation_id, is_group, "data.json"
         )
 
     @classmethod
@@ -362,9 +427,8 @@ class StorageBackend:
 
     @classmethod
     def _inventory_weights_path(cls, conversation_id: str, is_group: bool) -> Path:
-        return (
-            cls._get_session_dir(StorageType.INVENTORY, conversation_id, is_group)
-            / "weights.json"
+        return cls._session_file(
+            StorageType.INVENTORY, conversation_id, is_group, "weights.json"
         )
 
     @classmethod

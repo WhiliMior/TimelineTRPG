@@ -111,8 +111,8 @@ class ResourceModifierModule:
                 # 否则视为类型
                 type_input = arg
 
-            conversation_id = ctx.group_id or ctx.session_id or user_id
-            is_group = ctx.group_id is not None
+            conversation_id = ctx.conversation_id
+            is_group = ctx.is_group
             result = await self._add_modifier(
                 user_id,
                 conversation_id,

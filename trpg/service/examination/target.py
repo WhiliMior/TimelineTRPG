@@ -50,8 +50,8 @@ class TargetModule:
         .tar {等级}d 随机难度
         """
         # 判断会话类型
-        session_type = "group" if ctx.group_id else "private"
-        conversation_id = ctx.group_id or ctx.session_id or ctx.sender_id or "default"
+        session_type = ctx.session_type
+        conversation_id = ctx.conversation_id
 
         if not ctx.args:
             # 没有参数，显示当前目标值

@@ -47,8 +47,8 @@ class NegotiationModule:
         处理交涉命令
         """
         # 判断会话类型
-        session_type = "group" if ctx.group_id else "private"
-        conversation_id = ctx.group_id or ctx.session_id or ctx.sender_id or "default"
+        session_type = ctx.session_type
+        conversation_id = ctx.conversation_id
 
         if not ctx.args:
             # 显示当前交涉对象
@@ -145,7 +145,7 @@ class NegotiationModule:
     ) -> str:
         """执行交涉检定"""
         user_id = ctx.sender_id or "default"
-        session_type = "group" if ctx.group_id else "private"
+        session_type = ctx.session_type
 
         # 获取当前激活角色
         character = CharacterReader.get_active_character(user_id)

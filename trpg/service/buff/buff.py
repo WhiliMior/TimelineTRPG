@@ -132,8 +132,8 @@ class BuffModule:
         处理buff命令
         """
         user_id = ctx.sender_id or "default"
-        conversation_id = ctx.group_id or ctx.session_id or user_id
-        is_group = ctx.group_id is not None
+        conversation_id = ctx.conversation_id
+        is_group = ctx.is_group
 
         if not ctx.args:
             # 没有参数，显示所有buff
