@@ -58,3 +58,11 @@ def test_tlsetup_accepts_full_width_punctuation(make_ctx, run):
     run(character_module.tlsetup(make_ctx("tlsetup", "名称：小明，力量：30，等级：1")))
     character = StorageBackend.get_character("u1", "小明")
     assert character["data"]["力量"] == 30
+
+
+def test_templates_reload_after_clear_cache():
+    from timeline_trpg.trpg.adapter.message import ReplyManager
+
+    reply = ReplyManager("system")
+    ReplyManager.clear_cache()
+    assert "存档" in reply.render("data_corrupted")

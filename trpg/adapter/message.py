@@ -119,6 +119,8 @@ class ReplyManager:
 
         模板缺失时记录错误日志并返回通用提示，不让整条指令因文案缺失而失败。
         """
+        # 模块级单例在热重载后仍会复用，缓存被 clear_cache 清空后要能自动重新加载
+        self._ensure_config_loaded()
         template = self._templates.get(self.module_name, {}).get(template_name)
         if template is None:
             logger.error(f"[ReplyManager] 模板缺失: {self.module_name}.{template_name}")
@@ -142,6 +144,7 @@ class ReplyManager:
         Returns:
             原始模板字符串，如果不存在则返回 None
         """
+        self._ensure_config_loaded()
         try:
             return self._templates[self.module_name][template_name]
         except KeyError:
@@ -151,6 +154,7 @@ class ReplyManager:
         """
         检查指定模板是否存在
         """
+        self._ensure_config_loaded()
         return (
             self.module_name in self._templates
             and template_name in self._templates[self.module_name]
