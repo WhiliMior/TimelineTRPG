@@ -3,381 +3,99 @@
 迁移自老项目 Game/Runtime/Battle/BattleSystem.py 中的定时事件功能
 
 功能：
-- 调度带持续时间的buff事件
-- 调度带持续时间的护盾事件
-- 调度带持续时间的资源修饰事件
-- 执行到期的定时事件回调
+- 调度带持续时间（time_based）或生效次数（count_based）的事件
+- 结算到期事件并执行回调（buff / 护盾 / 资源修饰的移除）
 
 使用方式：
-- 每个业务模块在调用 schedule_event 时传入 callback_path（模块路径字符串）
-- 回调函数会被持久化存储在 battle json 中
-- 执行时根据 callback_path 动态计算相对导入层级并调用回调函数
-- infrastructure 层统一处理异步事件循环问题，各模块回调函数只需同步执行
+- 业务模块调用 schedule_event 时传入 callback_path（模块路径字符串）与当前时间点
+- 回调路径持久化在 battle json 中，到期时动态导入并 await 执行
+- 当前时间点由调用方（service 层的 TimelineCore）计算后传入，
+  本模块不依赖 service 层
 """
 
-import asyncio
-import time
+import importlib
+import inspect
+import logging
+import uuid
 
-from ..adapter.message import ReplyManager
 from .storage import StorageBackend
 
+logger = logging.getLogger("TimelineTRPG.scheduler")
 
-def _resolve_current_time(battle: dict) -> float:
-    """
-    实时计算战斗的当前时间点。
+TIME_BASED = "time_based"
+COUNT_BASED = "count_based"
 
-    current_time 不再持久化到文件（由 timeline_core 实时计算），
-    因此调度器必须根据 timeline 数据即时推算，否则会一直读到过期的 0 值，
-    导致带持续时间的事件（如资源修饰 dr）永远无法到期删除。
-
-    Args:
-        battle: 战斗数据字典
-
-    Returns:
-        float: 当前时间点，计算失败时回退到已存储的值
-    """
-    try:
-        from ..service.battle.core import TimelineCore
-
-        return TimelineCore().get_current_time(battle)
-    except Exception:
-        return battle.get("current_time", 0)
+# 本模块位于 <插件包>.trpg.infrastructure.scheduler，
+# AstrBot 以 data.plugins.<插件目录> 的形式加载插件，"trpg" 并不是顶层包
+_TRPG_PACKAGE = __name__.rsplit(".", 2)[0]
 
 
-def _execute_callback(callback_path: str, callback_args: dict):
-    """
-    执行回调函数（统一处理异步事件循环）
-
-    Args:
-        callback_path: 回调函数路径，格式如 "trpg.service.buff.buff.remove_expired_buff"
-        callback_args: 回调函数参数
-    """
-    import importlib
-    import sys
-
-    # 解析模块路径和函数名
-    parts = callback_path.rsplit(".", 1)
-    if len(parts) != 2:
-        return
-
-    module_path, function_name = parts
-
-    # 首先尝试直接导入模块路径
-    full_module_path = module_path
-
-    # 使用 importlib 动态导入模块和函数
-    try:
-        module = importlib.import_module(full_module_path)
-        callback_func = getattr(module, function_name)
-
-        # 检查是否为协程函数
-        if asyncio.iscoroutinefunction(callback_func):
-            # 统一处理异步函数的事件循环
-            try:
-                loop = asyncio.get_running_loop()
-                # 已有运行中的loop，使用 ensure_future 在后台调度
-                asyncio.ensure_future(callback_func(**callback_args), loop=loop)
-                return
-            except RuntimeError:
-                # 没有运行中的loop，可以安全使用 run_until_complete
-                pass
-
-            # 没有运行中的loop
-            try:
-                loop = asyncio.get_event_loop()
-                if not loop.is_running():
-                    loop.run_until_complete(callback_func(**callback_args))
-                    return
-            except RuntimeError:
-                pass
-
-            # 创建新的事件循环
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            try:
-                new_loop.run_until_complete(callback_func(**callback_args))
-            finally:
-                new_loop.close()
-        else:
-            # 同步函数直接调用
-            callback_func(**callback_args)
-    except Exception as e:
-        print(f"Error executing callback {callback_path}: {e}")
+def _resolve_module_path(module_path: str) -> str:
+    """把持久化的 "trpg.xxx" 回调路径映射到实际加载的包路径"""
+    if module_path == "trpg" or module_path.startswith("trpg."):
+        return _TRPG_PACKAGE + module_path[len("trpg") :]
+    return module_path
 
 
-class SchedulerModule:
-    """
-    定时事件调度器模块
-
-    提供统一的定时事件调度和执行功能，
-    避免 service 模块之间的循环引用。
-    """
-
-    def __init__(self):
-        self.system_reply = ReplyManager("system")
-
-    def schedule_event(
-        self,
-        conversation_id: str,
-        user_id: str,
-        character_name: str,
-        action_description: str,
-        duration_or_count: float,
-        callback_path: str,
-        callback_args: dict,
-        callback_message: str,
-        mode: str = "time_based",
-        event_type: str = "general",
-        is_group: bool = True,
-    ) -> bool:
-        """
-        调度一个定时事件
-
-        Args:
-            conversation_id: 会话ID
-            user_id: 用户ID
-            character_name: 角色名
-            action_description: 行动描述
-            duration_or_count: 持续时间或生效次数
-            callback_path: 回调函数路径
-            callback_args: 回调函数参数
-            callback_message: 回调执行提示
-            mode: 模式 ('time_based' 或 'count_based')
-            event_type: 事件类型 ('general', 'buff', 'shield', 'modifier')
-            is_group: 是否为群聊
-
-        Returns:
-            bool: 是否成功调度
-        """
-        storage_key = conversation_id
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return False
-
-        # 获取当前时间点（实时计算，避免读取到未持久化的过期值）
-        current_time = _resolve_current_time(battle)
-
-        # 创建事件对象
-        event = {
-            "id": f"event_{int(time.time())}_{len(battle.get('scheduled_events', []))}",
-            "event_type": event_type,
-            "action_description": action_description,
-            "start_time": current_time,
-            "user_id": user_id,
-            "character_name": character_name,
-            "callback_path": callback_path,
-            "callback_args": callback_args,
-            "callback_message": callback_message,
-            "mode": mode,
-        }
-
-        if mode == "time_based":
-            # 持续时间模式：当前时间 + 持续时间 = 结束时间
-            event["end_time"] = current_time + duration_or_count
-            event["remaining_count"] = None
-        elif mode == "count_based":
-            # 生效次数模式：记录剩余次数
-            event["remaining_count"] = int(duration_or_count)
-            event["end_time"] = None
-        else:
-            return False
-
-        # 添加到事件列表
-        if "scheduled_events" not in battle:
-            battle["scheduled_events"] = []
-        battle["scheduled_events"].append(event)
-
-        # 保存
-        self._save_battle(storage_key, battle, is_group)
+async def _run_callback(event: dict) -> bool:
+    """执行事件回调（同步或异步函数均可），失败时记录日志并返回 False"""
+    callback_path = event.get("callback_path")
+    if not callback_path:
         return True
 
-    def execute_scheduled_events(
-        self, conversation_id: str, user_id: str = None, is_group: bool = True
-    ) -> list[str]:
-        """
-        执行到期的定时事件
+    module_path, _, function_name = callback_path.rpartition(".")
+    if not module_path:
+        logger.error("定时事件回调路径无效: %s", callback_path)
+        return False
 
-        Args:
-            conversation_id: 会话ID
-            user_id: 用户ID，如果指定则只执行该用户的到期事件
-            is_group: 是否为群聊
-
-        Returns:
-            List[str]: 执行结果消息列表
-        """
-        storage_key = conversation_id
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return []
-
-        # 实时计算当前时间点（current_time 不再持久化到文件）
-        current_time = _resolve_current_time(battle)
-        scheduled_events = battle.get("scheduled_events", [])
-
-        executed_messages = []
-        events_to_remove = []
-
-        for i, event in enumerate(scheduled_events):
-            # 检查是否为时间模式且已到期（达到或超过结束时间即到期）
-            if (
-                event.get("mode") == "time_based"
-                and event.get("end_time") is not None
-                and current_time >= event.get("end_time", 0)
-            ):
-                # 如果指定了用户ID，只执行该用户的事件
-                if user_id is not None and event.get("user_id") != user_id:
-                    continue
-
-                # 执行回调
-                if "callback_path" in event and event["callback_path"]:
-                    try:
-                        callback_path = event["callback_path"]
-                        callback_args = event.get("callback_args", {})
-
-                        _execute_callback(callback_path, callback_args)
-                        executed_messages.append(event.get("callback_message", ""))
-                    except Exception as e:
-                        print(f"Error executing scheduled event callback: {e}")
-
-                # 标记为删除
-                events_to_remove.append(i)
-
-        # 从后往前删除已执行的事件
-        for i in reversed(events_to_remove):
-            if i < len(scheduled_events):
-                del scheduled_events[i]
-
-        # 保存更新后的事件列表
-        if events_to_remove:
-            battle["scheduled_events"] = scheduled_events
-            self._save_battle(storage_key, battle, is_group)
-
-        return executed_messages
-
-    def decrement_count_based_events(
-        self,
-        conversation_id: str,
-        user_id: str,
-        character_name: str,
-        is_group: bool = True,
-    ) -> list[str]:
-        """
-        递减指定角色的次数模式事件的剩余次数，并执行到期的回调
-
-        Args:
-            conversation_id: 会话ID
-            user_id: 用户ID
-            character_name: 角色名
-            is_group: 是否为群聊
-
-        Returns:
-            List[str]: 执行结果消息列表（次数耗尽时执行的回调消息）
-        """
-        storage_key = conversation_id
-        battle = self._get_battle(storage_key, is_group)
-
-        if not battle.get("name"):
-            return []
-
-        scheduled_events = battle.get("scheduled_events", [])
-        executed_messages = []
-        events_to_remove = []
-
-        for i, event in enumerate(scheduled_events):
-            # 检查是否为该用户和角色的次数模式事件
-            if (
-                event.get("user_id") == user_id
-                and event.get("character_name") == character_name
-                and event.get("mode") == "count_based"
-                and event.get("remaining_count") is not None
-            ):
-                # 递减剩余次数
-                event["remaining_count"] -= 1
-
-                # 检查是否已达到次数限制
-                if event["remaining_count"] <= 0:
-                    # 执行回调
-                    if "callback_path" in event and event["callback_path"]:
-                        try:
-                            callback_path = event["callback_path"]
-                            callback_args = event.get("callback_args", {})
-
-                            _execute_callback(callback_path, callback_args)
-                            executed_messages.append(event.get("callback_message", ""))
-                        except Exception as e:
-                            print(f"Error executing count_based event callback: {e}")
-
-                    # 标记为删除
-                    events_to_remove.append(i)
-
-        # 从后往前删除次数耗尽的事件
-        for i in reversed(events_to_remove):
-            if i < len(scheduled_events):
-                del scheduled_events[i]
-
-        # 保存更新后的事件列表
-        # 无论是否有事件被删除，都需要保存递减后的数据
-        self._save_battle(storage_key, battle, is_group)
-
-        return executed_messages
-
-    def _get_battle(self, storage_key: str, is_group: bool = True) -> dict:
-        """获取战斗数据"""
-        data = StorageBackend.load_battle_timeline(storage_key, is_group)
-        if not data.get("battle_list"):
-            data["battle_list"] = {}
-
-        active_battle_id = data.get("active_battle_id")
-
-        if active_battle_id and active_battle_id in data["battle_list"]:
-            return data["battle_list"][active_battle_id]
-        else:
-            return {
-                "name": None,
-                "participants": {},
-                "timeline": {},
-                "current_time": 0,
-                "max_time": 0,
-                "scheduled_events": [],
-            }
-
-    def _save_battle(self, storage_key: str, battle: dict, is_group: bool = True):
-        """保存战斗数据"""
-        data = StorageBackend.load_battle_timeline(storage_key, is_group)
-
-        if not data.get("battle_list"):
-            data["battle_list"] = {}
-        if "player" not in data:
-            data["player"] = {}
-
-        active_battle_id = data.get("active_battle_id")
-
-        if active_battle_id:
-            data["battle_list"][active_battle_id] = battle
-        else:
-            new_battle_id = str(int(time.time()))
-            data["active_battle_id"] = new_battle_id
-            data["battle_list"][new_battle_id] = battle
-
-        StorageBackend.save_battle_timeline(storage_key, data, is_group)
+    try:
+        module = importlib.import_module(_resolve_module_path(module_path))
+        result = getattr(module, function_name)(**(event.get("callback_args") or {}))
+        if inspect.isawaitable(result):
+            await result
+        return True
+    except Exception:
+        logger.exception("定时事件回调执行失败: %s", callback_path)
+        return False
 
 
-# 创建模块实例
-scheduler_module = SchedulerModule()
+async def _run_callbacks(events: list[dict]) -> list[str]:
+    """依次执行回调，返回需要提示给玩家的到期消息"""
+    messages = []
+    for event in events:
+        await _run_callback(event)
+        message = event.get("callback_message")
+        if message:
+            messages.append(message)
+    return messages
 
 
-def execute_scheduled_events(
-    conversation_id: str, user_id: str = None, is_group: bool = True
-) -> list[str]:
-    """
-    执行到期的定时事件（便捷函数）
-    """
-    return scheduler_module.execute_scheduled_events(conversation_id, user_id, is_group)
+def _load_active_battle(conversation_id: str, is_group: bool) -> dict | None:
+    data = StorageBackend.load_battle_timeline(conversation_id, is_group)
+    return StorageBackend.get_active_battle(data)
 
 
-def schedule_event(
+def _is_due(event: dict, current_time: float, user_id: str | None) -> bool:
+    if user_id is not None and event.get("user_id") != user_id:
+        return False
+    end_time = event.get("end_time")
+    return (
+        event.get("mode") == TIME_BASED
+        and end_time is not None
+        and current_time >= end_time
+    )
+
+
+def _is_counted_for(event: dict, user_id: str, character_name: str) -> bool:
+    return (
+        event.get("mode") == COUNT_BASED
+        and event.get("remaining_count") is not None
+        and event.get("user_id") == user_id
+        and event.get("character_name") == character_name
+    )
+
+
+async def schedule_event(
     conversation_id: str,
     user_id: str,
     character_name: str,
@@ -386,43 +104,133 @@ def schedule_event(
     callback_path: str,
     callback_args: dict,
     callback_message: str,
-    mode: str = "time_based",
+    *,
+    current_time: float,
+    mode: str = TIME_BASED,
     event_type: str = "general",
     is_group: bool = True,
-) -> bool:
+) -> dict | None:
     """
-    调度一个定时事件（便捷函数）
+    调度一个定时事件
+
+    Args:
+        current_time: 战斗当前时间点（由调用方实时计算）
+        mode: 'time_based'（持续 duration_or_count 时间）或 'count_based'（生效次数）
+        event_type: 'general' / 'buff' / 'shield' / 'modifier'
+
+    Returns:
+        dict | None: 创建的事件；会话中没有进行中的战斗或参数无效时返回 None
     """
-    return scheduler_module.schedule_event(
-        conversation_id,
-        user_id,
-        character_name,
-        action_description,
-        duration_or_count,
-        callback_path,
-        callback_args,
-        callback_message,
-        mode,
-        event_type,
-        is_group,
-    )
+    if mode not in (TIME_BASED, COUNT_BASED):
+        return None
+    if _load_active_battle(conversation_id, is_group) is None:
+        return None
+
+    event = {
+        "id": uuid.uuid4().hex,
+        "event_type": event_type,
+        "action_description": action_description,
+        "start_time": current_time,
+        "user_id": user_id,
+        "character_name": character_name,
+        "callback_path": callback_path,
+        "callback_args": callback_args,
+        "callback_message": callback_message,
+        "mode": mode,
+    }
+    if mode == TIME_BASED:
+        event["end_time"] = current_time + duration_or_count
+        event["remaining_count"] = None
+    else:
+        event["remaining_count"] = int(duration_or_count)
+        event["end_time"] = None
+
+    async with StorageBackend.edit_battle_timeline(conversation_id, is_group) as data:
+        battle = StorageBackend.get_active_battle(data)
+        if battle is None:
+            return None
+        battle.setdefault("scheduled_events", []).append(event)
+    return event
 
 
-def decrement_count_based_events(
+async def execute_scheduled_events(
+    conversation_id: str,
+    current_time: float,
+    user_id: str | None = None,
+    is_group: bool = True,
+) -> list[str]:
+    """
+    结算到期（current_time >= end_time）的时间模式事件
+
+    Args:
+        current_time: 战斗当前时间点（由调用方实时计算）
+        user_id: 指定时只结算该用户的事件
+
+    Returns:
+        list[str]: 到期提示消息
+    """
+    battle = _load_active_battle(conversation_id, is_group)
+    if battle is None or not any(
+        _is_due(e, current_time, user_id) for e in battle.get("scheduled_events", [])
+    ):
+        return []
+
+    async with StorageBackend.edit_battle_timeline(conversation_id, is_group) as data:
+        battle = StorageBackend.get_active_battle(data) or {}
+        events = battle.get("scheduled_events", [])
+        due = [e for e in events if _is_due(e, current_time, user_id)]
+        battle["scheduled_events"] = [
+            e for e in events if not _is_due(e, current_time, user_id)
+        ]
+
+    # 回调会修改角色存档，在释放战斗文件锁之后执行
+    return await _run_callbacks(due)
+
+
+async def decrement_count_based_events(
     conversation_id: str, user_id: str, character_name: str, is_group: bool = True
 ) -> list[str]:
     """
-    递减指定角色的次数模式事件的剩余次数（便捷函数）
-
-    Args:
-        conversation_id: 会话ID
-        user_id: 用户ID
-        character_name: 角色名
-        is_group: 是否为群聊
+    指定角色行动一次：其次数模式事件剩余次数减 1，耗尽的事件执行回调并移除
 
     Returns:
-        List[str]: 执行结果消息列表
+        list[str]: 次数耗尽的事件提示消息
     """
-    return scheduler_module.decrement_count_based_events(
-        conversation_id, user_id, character_name, is_group
-    )
+    battle = _load_active_battle(conversation_id, is_group)
+    if battle is None or not any(
+        _is_counted_for(e, user_id, character_name)
+        for e in battle.get("scheduled_events", [])
+    ):
+        return []
+
+    async with StorageBackend.edit_battle_timeline(conversation_id, is_group) as data:
+        battle = StorageBackend.get_active_battle(data) or {}
+        remaining, exhausted = [], []
+        for event in battle.get("scheduled_events", []):
+            if _is_counted_for(event, user_id, character_name):
+                event["remaining_count"] -= 1
+                if event["remaining_count"] <= 0:
+                    exhausted.append(event)
+                    continue
+            remaining.append(event)
+        battle["scheduled_events"] = remaining
+
+    return await _run_callbacks(exhausted)
+
+
+async def restore_count_based_events(
+    conversation_id: str, user_id: str, character_name: str, is_group: bool = True
+) -> None:
+    """撤销行动时，把指定角色次数模式事件的剩余次数加回 1"""
+    battle = _load_active_battle(conversation_id, is_group)
+    if battle is None or not any(
+        _is_counted_for(e, user_id, character_name)
+        for e in battle.get("scheduled_events", [])
+    ):
+        return
+
+    async with StorageBackend.edit_battle_timeline(conversation_id, is_group) as data:
+        battle = StorageBackend.get_active_battle(data) or {}
+        for event in battle.get("scheduled_events", []):
+            if _is_counted_for(event, user_id, character_name):
+                event["remaining_count"] += 1

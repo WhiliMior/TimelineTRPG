@@ -84,9 +84,9 @@ class CharacterResetModule:
         user_id = ctx.sender_id or "default"
 
         # 导入 service 层模块（单向引用）
-        from ..service.resource.resource import resource_record_module
-        from ..service.resource.modifier import resource_modifier_module
         from ..service.buff.buff import buff_module
+        from ..service.resource.modifier import resource_modifier_module
+        from ..service.resource.resource import resource_record_module
 
         results = []
         errors = []
@@ -129,9 +129,3 @@ class CharacterResetModule:
 
 # 创建模块实例
 character_reset_module = CharacterResetModule()
-
-# 注册到 infrastructure 层的指令转发器
-# service 层通过 command_dispatcher.dispatch("chr_reset", ctx) 调用
-from ..infrastructure.command_dispatcher import command_dispatcher
-
-command_dispatcher.register("chr_reset", character_reset_module._reset_character_state)

@@ -47,13 +47,13 @@ class NegotiationModule:
         处理交涉命令
         """
         # 判断会话类型
-        session_type = "group" if ctx.group_id else "private"
-        conversation_id = ctx.group_id or ctx.session_id or ctx.sender_id or "default"
+        session_type = ctx.session_type
+        conversation_id = ctx.conversation_id
 
         if not ctx.args:
             # 显示当前交涉对象
             target = self._get_negotiation_target(conversation_id, session_type)
-            if target is None:
+            if not target or "level" not in target:
                 response = self.reply.render("no_current_negotiation_target")
             else:
                 target_level = target["level"]
@@ -145,7 +145,7 @@ class NegotiationModule:
     ) -> str:
         """执行交涉检定"""
         user_id = ctx.sender_id or "default"
-        session_type = "group" if ctx.group_id else "private"
+        session_type = ctx.session_type
 
         # 获取当前激活角色
         character = CharacterReader.get_active_character(user_id)
@@ -162,8 +162,7 @@ class NegotiationModule:
             return self.reply.render("negotiation_attribute_not_found")
 
         # 获取角色的等级
-        character_data = character.get("data", {})
-        level = character_data.get("等级", 1)
+        level = CharacterReader.effective_level(character.get("data"))
 
         # 获取目标
         target = self._get_negotiation_target(conversation_id, session_type)
@@ -216,6 +215,8 @@ class NegotiationModule:
         """
         if target_intelligence <= 0:
             return 0.0
+        level = max(level, 1)
+        target_level = max(target_level, 1)
 
         success_rate = (
             (rp_grade + (negotiation_value / level)) / target_intelligence * 25

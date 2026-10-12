@@ -7,6 +7,9 @@
 
 from typing import TYPE_CHECKING
 
+from ...infrastructure.config.game_config import game_config
+from ...infrastructure.storage import StorageBackend
+
 if TYPE_CHECKING:
     from ..battle import BattleModule
 
@@ -21,6 +24,24 @@ class TimelineCore:
 
     def __init__(self, battle_module: "BattleModule | None" = None):
         self._battle = battle_module
+
+    @staticmethod
+    def timeline_slot(battle: dict, time_point: float) -> list:
+        """
+        获取（必要时创建）时间点对应的行动列表
+
+        优先复用数值相同的已有键（例如修改精度前写入的 "10.0" 与现在的 "10"），
+        避免同一时间点被拆成两个键。
+        """
+        timeline = battle.setdefault("timeline", {})
+        key = game_config.time_key(time_point)
+        if key not in timeline:
+            target = float(key)
+            for existing in timeline:
+                if abs(float(existing) - target) < 1e-9:
+                    key = existing
+                    break
+        return timeline.setdefault(key, [])
 
     def get_latest_action_end_time(
         self, battle: dict, user_id: str, character_name: str
@@ -147,8 +168,13 @@ class TimelineCore:
         return 0.0
 
 
-# 全局实例会在 BattleModule 初始化时创建
-timeline_core: TimelineCore | None = None
+def get_conversation_current_time(conversation_id: str, is_group: bool) -> float | None:
+    """会话中进行中战斗的当前时间点；没有进行中的战斗时返回 None"""
+    data = StorageBackend.load_battle_timeline(conversation_id, is_group)
+    battle = StorageBackend.get_active_battle(data)
+    if battle is None:
+        return None
+    return TimelineCore().get_current_time(battle)
 
 
 def init_timeline_core(battle_module: "BattleModule") -> TimelineCore:

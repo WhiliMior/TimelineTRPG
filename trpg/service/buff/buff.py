@@ -12,14 +12,16 @@ Buff模块 - 管理角色增益/减益效果
 - 与老项目 TimelineBot 的数据存储方式完全一致
 """
 
-import asyncio
 from datetime import datetime
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
 from ...infrastructure.attribute_resolver import AttributeResolver
+from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ..battle.core import get_conversation_current_time
 
 # Buff类型常量
 VALID_BUFF_TYPES = {"直接加算", "直接乘算", "最终加算", "最终乘算"}
@@ -62,6 +64,14 @@ def parse_buff_value(value_str: str, buff_type: str) -> float:
         value = value / 100
 
     return value
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
 
 
 def format_buff_value(value: float, buff_type: str) -> str:
@@ -121,7 +131,8 @@ class BuffModule:
         处理buff命令
         """
         user_id = ctx.sender_id or "default"
-        conversation_id = ctx.group_id or ctx.session_id or user_id
+        conversation_id = ctx.conversation_id
+        is_group = ctx.is_group
 
         if not ctx.args:
             # 没有参数，显示所有buff
@@ -131,7 +142,7 @@ class BuffModule:
 
         command = ctx.args[0].lower()
 
-        if command == "add" and len(ctx.args) >= 5:
+        if command == "add" and len(ctx.args) >= 4:
             # 支持两种格式，类型和数值位置可自由调换：
             # 1. 标准格式: .buff add {名称} {属性} {类型} {数值} [持续时间]
             #    例: .buff add 力量Buff 力量 直接加算 5 10
@@ -151,28 +162,30 @@ class BuffModule:
             value_str = None
             duration = None
 
+            # 第一个数值是 buff 数值，之后的纯数字才是生效次数
             for arg in extra_args:
-                # 检查是否是持续时间
-                if arg in ("0", "0t"):
-                    continue
-                if arg.endswith("t"):
-                    duration = arg
-                    continue
-                if arg.isdigit():
-                    duration = int(arg)
-                    continue
-
-                # 检查是否是类型
                 if arg in VALID_BUFF_TYPES:
                     buff_type = arg
                     continue
 
-                # 检查是否是 "数值d" 格式
+                if arg.lower().endswith("t") and _is_number(arg[:-1]):
+                    if float(arg[:-1]) > 0:
+                        duration = arg.lower()
+                    continue
+
                 if arg.lower().endswith("d") and len(arg) > 1 and arg[:-1].isdigit():
                     value_str = arg
                     continue
 
-                # 否则视为数值
+                if value_str is None:
+                    value_str = arg
+                    continue
+
+                if arg.isdigit():
+                    if int(arg) > 0:
+                        duration = int(arg)
+                    continue
+
                 value_str = arg
 
             # 判断是否使用 "数值d" 格式
@@ -187,7 +200,7 @@ class BuffModule:
                     ctx.send(response)
                     return True
 
-                level = character.get("data", {}).get("等级", 1)
+                level = CharacterReader.effective_level(character.get("data"))
                 dice_count_str = value_str[:-1]  # 去掉 d
                 dice_count = int(dice_count_str)
                 # 效果% = 数值/(等级*10)
@@ -238,6 +251,7 @@ class BuffModule:
                 buff_type,
                 value,
                 duration,
+                is_group,
             )
             ctx.send(result)
 
@@ -295,18 +309,20 @@ class BuffModule:
             return []
         return active_char.get("buffs", [])
 
-    async def _save_buffs(self, user_id: str, buffs: list[dict]):
+    async def _save_buffs(self, user_id: str, buffs: list[dict]) -> bool:
         """保存buff列表 - 通过StorageBackend保存到角色buffs字段中"""
 
         active_char = await self._get_active_character(user_id)
         if not active_char:
-            return
+            return False
 
         # 更新角色的buffs字段
         active_char["buffs"] = buffs
 
         # 通过StorageBackend保存整个角色数据
-        StorageBackend.update_character(user_id, active_char.get("name"), active_char)
+        return StorageBackend.update_character(
+            user_id, active_char.get("name"), active_char
+        )
 
     async def _add_buff(
         self,
@@ -317,6 +333,7 @@ class BuffModule:
         buff_type: str,
         value: float,
         duration,
+        is_group: bool = True,
     ) -> str:
         """添加buff"""
         # 检查角色
@@ -380,33 +397,34 @@ class BuffModule:
                 f"{character_name} Buff{buff_type} {resolved_attribute}{value:+g}"
             )
 
-            # 直接调用 scheduler 调度事件
-            from ...infrastructure.scheduler import schedule_event
-
             duration_value = (
                 float(duration[:-1])
                 if (isinstance(duration, str) and duration.endswith("t"))
                 else float(duration)
             )
 
-            schedule_event(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                character_name=character_name,
-                action_description=action_desc,
-                duration_or_count=duration_value,
-                callback_path="trpg.service.buff.buff.remove_expired_buff",
-                callback_args={
-                    "user_id": user_id,
-                    "created_at": created_at,
-                    "attribute": resolved_attribute,
-                    "buff_type": buff_type,
-                    "buff_value": value,
-                },
-                callback_message=callback_message,
-                mode=mode,
-                event_type="buff",
-            )
+            current_time = get_conversation_current_time(conversation_id, is_group)
+            if current_time is not None:
+                await schedule_event(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    character_name=character_name,
+                    action_description=action_desc,
+                    duration_or_count=duration_value,
+                    callback_path="trpg.service.buff.buff.remove_expired_buff",
+                    callback_args={
+                        "user_id": user_id,
+                        "created_at": created_at,
+                        "attribute": resolved_attribute,
+                        "buff_type": buff_type,
+                        "buff_value": value,
+                    },
+                    callback_message=callback_message,
+                    current_time=current_time,
+                    mode=mode,
+                    event_type="buff",
+                    is_group=is_group,
+                )
 
         duration_str = "永久" if duration is None else str(duration)
         value_display = format_buff_value(value, buff_type)
@@ -532,38 +550,6 @@ class BuffModule:
 
         return "\n".join(lines)
 
-    def get_buff_modifier(self, user_id: str, attribute: str) -> float:
-        """
-        获取角色指定属性的Buff修正值（同步版本）
-        用于与角色属性系统集成
-        """
-        buffs = asyncio.run(self._get_buffs(user_id))
-
-        total_modifier = 0.0
-        for buff in buffs:
-            if buff.get("attribute") == attribute:
-                total_modifier += buff.get("value", 0)
-
-        return total_modifier
-
-    async def get_buff_modifier_async(self, user_id: str, attribute: str) -> float:
-        """
-        获取角色指定属性的Buff修正值（异步版本）
-        用于与战斗系统集成
-        """
-        buffs = await self._get_buffs(user_id)
-
-        total_modifier = 0.0
-        for buff in buffs:
-            if buff.get("attribute") == attribute:
-                total_modifier += buff.get("value", 0)
-
-        return total_modifier
-
-
-# 用于存储正在等待保存的角色数据（避免并发问题）
-_pending_character_saves: dict[str, asyncio.Lock] = {}
-
 
 async def remove_expired_buff(
     user_id: str,
@@ -573,45 +559,18 @@ async def remove_expired_buff(
     buff_value: float = None,
 ) -> bool:
     """
-    模块级函数，用于移除过期的buff
-    由战斗系统在定时事件触发时调用
+    模块级函数，用于移除过期的buff（定时事件到期回调）
 
-    直接使用 created_at 精确匹配要删除的buff
-    infrastructure 层会统一处理事件循环
+    按 created_at 精确匹配；在该用户的所有角色中查找，
+    玩家中途切换了激活角色也能正确移除。
     """
-    from ..character.character import character_module
-
-    # 获取角色模块
-    char_module = character_module
-
-    # 获取当前激活的角色
-    active_char = await char_module.get_active_character(user_id)
-    if not active_char:
-        return False
-
-    buffs = active_char.get("buffs", [])
-
-    if not buffs:
-        return False
-
-    # 查找并移除匹配的buff（使用唯一标识：created_at）
-    original_count = len(buffs)
-    buffs = [b for b in buffs if b.get("created_at") != created_at]
-
-    if len(buffs) < original_count:
-        # 更新并保存角色数据
-        active_char["buffs"] = buffs
-
-        # 保存角色数据
-        characters = await char_module._get_user_characters(user_id)
-        for i, char in enumerate(characters):
-            if char.get("name") == active_char.get("name"):
-                characters[i] = active_char
-                break
-        await char_module._save_characters(user_id, characters)
-
-        return True
-
+    async with StorageBackend.edit_characters(user_id) as characters:
+        for character in characters:
+            buffs = character.get("buffs") or []
+            kept = [b for b in buffs if b.get("created_at") != created_at]
+            if len(kept) < len(buffs):
+                character["buffs"] = kept
+                return True
     return False
 
 

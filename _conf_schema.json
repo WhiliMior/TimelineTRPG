@@ -1,0 +1,45 @@
+{
+  "precision": {
+    "type": "object",
+    "description": "数值显示精度（小数位数）",
+    "hint": "0 为整数，1 保留一位小数，以此类推（0~5）。时间精度也可在聊天中用 .tl acc 修改，修改后会同步到这里。",
+    "items": {
+      "time": {
+        "type": "int",
+        "default": 2,
+        "description": "时间",
+        "hint": "时间线上行动时间的精度；修改后，已有时间点按数值合并显示"
+      },
+      "impact": {
+        "type": "int",
+        "default": 0,
+        "description": "影响值"
+      },
+      "percentage": {
+        "type": "int",
+        "default": 1,
+        "description": "百分比"
+      },
+      "attribute": {
+        "type": "int",
+        "default": 0,
+        "description": "属性值"
+      },
+      "resource": {
+        "type": "int",
+        "default": 1,
+        "description": "体力/意志/护盾等资源"
+      },
+      "weight": {
+        "type": "int",
+        "default": 2,
+        "description": "物品重量"
+      },
+      "success_rate": {
+        "type": "int",
+        "default": 1,
+        "description": "成功率"
+      }
+    }
+  }
+}

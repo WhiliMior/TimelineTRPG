@@ -35,8 +35,11 @@ class TimelineFormatter:
         if not timeline:
             return TimelineFormatter._get_empty_message()
 
-        # 按时间点排序
-        sorted_times = sorted([float(t) for t in timeline.keys()])
+        # 按时间点排序（直接使用已有键，不要按精度重新拼键，否则会与存储键不一致）
+        sorted_points = sorted(
+            ((float(key), actions) for key, actions in timeline.items()),
+            key=lambda item: item[0],
+        )
 
         current_time = battle.get("current_time", 0)
         max_time = battle.get("max_time", 0)
@@ -50,12 +53,9 @@ class TimelineFormatter:
         # key: (user_id, character_name), value: (end_time, action)
         latest_action_by_character: dict[tuple[str, str], tuple[float, dict]] = {}
 
-        for time_point in sorted_times:
+        for time_point, actions in sorted_points:
             if time_point < current_time:
                 continue
-
-            time_str = TimelineFormatter._format_time_str(time_point)
-            actions = timeline.get(time_str, [])
 
             if actions:
                 for action in actions:
@@ -85,7 +85,7 @@ class TimelineFormatter:
                 if char_info.get("status") != "参与中":
                     continue
 
-                time_str = TimelineFormatter._format_time_str(time_point)
+                time_str = game_config.round_value(time_point, "time")
 
                 # 时间分隔符
                 dashes = "—" * 5
@@ -134,11 +134,6 @@ class TimelineFormatter:
         current = game_config.round_value(current_time, "time")
         max_val = game_config.round_value(max_time, "time")
         return reply.render("timeline_current_max_time", current=current, max=max_val)
-
-    @staticmethod
-    def _format_time_str(time_point: float) -> str:
-        """格式化时间点字符串"""
-        return f"{time_point:.1f}" if time_point.is_integer() else f"{time_point}"
 
     @staticmethod
     def _format_action(action: dict, attribute_label: str) -> list[str]:

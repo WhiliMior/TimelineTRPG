@@ -10,23 +10,23 @@ import re
 from collections.abc import Generator
 from pathlib import Path
 
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.message_components import Image
 from astrbot.api.star import Context, Star, register
 
 from .adapter.router import Router
-
-# 导入 adapter 层（使用相对导入，与 qq_group_daily_analysis 保持一致）
 from .trpg.adapter.command_context import CommandContext
 from .trpg.adapter.message import ReplyManager
+from .trpg.batch_command.character_reset import character_reset_module
+from .trpg.infrastructure.command_dispatcher import command_dispatcher
+from .trpg.infrastructure.config.game_config import game_config
 from .trpg.infrastructure.help import HelpEntry, HelpRegistry
+from .trpg.infrastructure.storage import StorageBackend
 from .trpg.service.battle.battle import battle_module
 from .trpg.service.battle.timeline import timeline_module
 from .trpg.service.buff.buff import buff_module
 from .trpg.service.character.character import character_module
-
-# 导入业务模块（使用新的服务层路径）
 from .trpg.service.dice.dice import roll_dice_module
 from .trpg.service.examination.examination import examination_module
 from .trpg.service.examination.target import target_module
@@ -37,15 +37,9 @@ from .trpg.service.resource.modifier import resource_modifier_module
 from .trpg.service.resource.resource import resource_record_module
 from .trpg.service.weapon.weapon import weapon_module
 
-# 导入 infrastructure 层的指令转发器
-from .trpg.infrastructure.command_dispatcher import command_dispatcher
-
-# 导入 batch_command 层（触发指令注册）
-from .trpg.batch_command.character_reset import character_reset_module
-
 # 插件信息
 PLUGIN_NAME = "TimelineTRPG"
-PLUGIN_VERSION = "v0.1"
+PLUGIN_VERSION = "v0.8"
 PLUGIN_AUTHOR = "WhiliMior"
 
 
@@ -58,8 +52,17 @@ class TimelineTRPG(Star):
     使用 adapter 层架构，业务模块完全解耦
     """
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
+        self.config = config
+        if config is not None:
+            game_config.bind_panel_config(config)
+
+        # batch_command 处理器在这里显式注册：热重载时 terminate 会注销，重新实例化时再注册
+        command_dispatcher.register(
+            "chr_reset", character_reset_module._reset_character_state
+        )
+
         self.router = Router()
         self.system_reply = ReplyManager("system")
         self.help_registry = HelpRegistry(
@@ -327,7 +330,7 @@ class TimelineTRPG(Star):
                 f"  traceback: {traceback.format_exc(limit=5)}"
             )
             yield event.plain_result(
-                self.system_reply.render("internal_error", error=str(e))
+                self.system_reply.render("internal_error", command=command)
             )
 
     async def _send_image(self, event: AstrMessageEvent, image_path: str):
@@ -390,7 +393,11 @@ class TimelineTRPG(Star):
         )
 
     async def terminate(self):
-        """插件销毁方法"""
+        """插件销毁方法：清理类级缓存与全局注册，保证热重载后状态干净"""
+        command_dispatcher.unregister("chr_reset")
+        game_config.reset()
+        StorageBackend.reset_cache()
+        ReplyManager.clear_cache()
         logger.info(f"[{PLUGIN_NAME}] 插件已卸载，adapter 层架构已清理")
 
 

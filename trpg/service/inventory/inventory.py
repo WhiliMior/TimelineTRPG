@@ -63,9 +63,6 @@ class InventoryModule:
             ctx.send(result)
             return True
 
-        # 获取原始命令文本（用于解析带空格的物品名）
-        raw_args = " ".join(ctx.args)
-
         # 检查是否是 cash 命令
         if ctx.args[0].lower() == "cash":
             if len(ctx.args) == 1:
@@ -414,24 +411,18 @@ class InventoryModule:
         is_removal = quantity < 0
 
         # 如果有重量参数，自动记录到存储中
-        if weight_value is not None and ctx is not None:
-            conversation_id = ctx.group_id or ctx.sender_id or user_id
-            is_group = ctx.group_id is not None
-            from ...infrastructure.storage import StorageBackend
-
+        weight_auto_filled = False
+        if ctx is not None:
+            conversation_id, is_group = ctx.conversation_id, ctx.is_group
             weights = StorageBackend.load_inventory_weights(conversation_id, is_group)
-            weights[item_name] = weight_value
-            StorageBackend.save_inventory_weights(conversation_id, weights, is_group)
-
-        # 如果没有重量参数，尝试从存储中自动获取
-        if weight_value is None and ctx is not None:
-            conversation_id = ctx.group_id or ctx.sender_id or user_id
-            is_group = ctx.group_id is not None
-            from ...infrastructure.storage import StorageBackend
-
-            weights = StorageBackend.load_inventory_weights(conversation_id, is_group)
-            if item_name in weights:
+            if weight_value is not None:
+                weights[item_name] = weight_value
+                StorageBackend.save_inventory_weights(
+                    conversation_id, weights, is_group
+                )
+            elif item_name in weights:
                 weight_value = weights[item_name]
+                weight_auto_filled = True
 
         # 查找物品
         found = False
@@ -464,19 +455,10 @@ class InventoryModule:
                     "item_removed", name=item_name, quantity=abs(quantity)
                 )
             else:
-                # 如果自动获取了重量，提示用户
-                if weight_value is not None and weight is None and ctx is not None:
-                    conversation_id = ctx.group_id or ctx.sender_id or user_id
-                    is_group = ctx.group_id is not None
-                    from ...infrastructure.storage import StorageBackend
-
-                    weights = StorageBackend.load_inventory_weights(
-                        conversation_id, is_group
+                if weight_auto_filled:
+                    return self.reply.render(
+                        "item_weight_auto", name=item_name, weight=weight_value
                     )
-                    if item_name in weights:
-                        return self.reply.render(
-                            "item_weight_auto", name=item_name, weight=weight_value
-                        )
                 return self.reply.render(
                     "item_added", name=item_name, quantity=abs(quantity)
                 )

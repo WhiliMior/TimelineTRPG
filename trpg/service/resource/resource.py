@@ -5,9 +5,12 @@
 
 from ...adapter.command_context import CommandContext
 from ...adapter.message import ReplyManager
+from ...infrastructure.character_reader import CharacterReader
 from ...infrastructure.config.game_config import game_config
 from ...infrastructure.help import HelpEntry
+from ...infrastructure.scheduler import schedule_event
 from ...infrastructure.storage import StorageBackend
+from ..battle.core import get_conversation_current_time
 
 
 class ResourceRecordModule:
@@ -103,9 +106,9 @@ class ResourceRecordModule:
             resource_type = self.RESOURCE_TYPE_MAPPING[command]
             if resource_type == "shield":
                 # 护盾: .rc 护盾/s {变化值} (覆盖范围) (持续时间) (f)
-                conversation_id = ctx.group_id or ctx.session_id or user_id
+                conversation_id = ctx.conversation_id
                 result = await self._handle_shield(
-                    user_id, conversation_id, ctx.args[1:]
+                    user_id, conversation_id, ctx.args[1:], ctx.is_group
                 )
                 ctx.send(result)
             else:
@@ -118,8 +121,10 @@ class ResourceRecordModule:
 
         # 检查是否是 s 或 护盾
         if command == "s" or command == "护盾":
-            conversation_id = ctx.group_id or ctx.session_id or user_id
-            result = await self._handle_shield(user_id, conversation_id, ctx.args[1:])
+            conversation_id = ctx.conversation_id
+            result = await self._handle_shield(
+                user_id, conversation_id, ctx.args[1:], ctx.is_group
+            )
             ctx.send(result)
             return True
 
@@ -161,8 +166,6 @@ class ResourceRecordModule:
             return {"current_hp": 0, "current_mp": 0, "shields": []}
 
         # 使用CharacterReader获取最终属性（包含buff修正）
-        from ...infrastructure.character_reader import CharacterReader
-
         final_attributes = CharacterReader.get_character_final_attributes(user_id)
 
         if not final_attributes:
@@ -200,8 +203,6 @@ class ResourceRecordModule:
     ) -> tuple[float | None, float | None]:
         """获取角色的HP和MP最大值（使用最终属性，经过buff修正）"""
         # 使用CharacterReader获取最终属性（包含buff修正）
-        from ...infrastructure.character_reader import CharacterReader
-
         final_attributes = CharacterReader.get_character_final_attributes(user_id)
 
         if not final_attributes:
@@ -288,9 +289,6 @@ class ResourceRecordModule:
 
         # 按优先级排序：同类型优先，持续时间短优先，创建时间早优先
         sorted_shields = sorted(shields, key=get_priority)
-
-        # 记录每种类型护盾的总消耗和调整前后值
-        shield_damage_before = damage_to_absorb  # 承伤前
 
         # 处理护盾消耗
         for shield in sorted_shields:
@@ -391,7 +389,6 @@ class ResourceRecordModule:
 
         # 确定操作方向：正值为增加(+)，负值为减少(-)
         is_increase = value_change > 0
-        sign = "+" if is_increase else "-"
 
         # 根据资源类型和操作方向确定目标范围
         # +范围只对增加资源生效，-范围只对减少资源生效
@@ -562,7 +559,7 @@ class ResourceRecordModule:
         elif value_type == "defense":
             try:
                 defense = float(raw.rstrip("dD"))
-                level = character_data.get("等级", 1)
+                level = CharacterReader.effective_level(character_data)
 
                 if range_val.startswith("-"):
                     return defense / (defense + (level * 10))
@@ -612,7 +609,6 @@ class ResourceRecordModule:
                 change_type = potential_type
 
         # 应用资源修饰（对正值和负值都应用，只是范围不同）
-        original_change = value_change
         if resource_type in ["hp", "mp"]:
             value_change, modifier_info = await self._apply_modifiers(
                 user_id, resource_type, value_change, change_type
@@ -629,7 +625,6 @@ class ResourceRecordModule:
         current_value = resources.get(current_attr, 0)
 
         # 应用护盾保护（仅对负值，即减少操作）
-        original_change = value_change
         if resource_type in ["hp", "mp"] and value_change < 0:
             value_change, shield_info = await self._apply_shield_protection(
                 user_id, resources, resource_type, value_change
@@ -641,7 +636,6 @@ class ResourceRecordModule:
         new_value = current_value + value_change
 
         # 验证范围（除非允许溢出）
-        overflow_msg = ""
         if not allow_overflow:
             if new_value < 0:
                 new_value = 0
@@ -677,7 +671,11 @@ class ResourceRecordModule:
             return self.reply.render("save_failed")
 
     async def _handle_shield(
-        self, user_id: str, conversation_id: str, args: list[str]
+        self,
+        user_id: str,
+        conversation_id: str,
+        args: list[str],
+        is_group: bool = True,
     ) -> str:
         """处理护盾资源"""
         if len(args) < 1:
@@ -780,6 +778,7 @@ class ResourceRecordModule:
                 duration,
                 coverage_type,
                 shield_value,
+                is_group,
             )
 
         if await self._save_resource_data(user_id, resources):
@@ -910,18 +909,21 @@ class ResourceRecordModule:
         duration: str,
         coverage_type: str,
         shield_value: float,
-    ):
+        is_group: bool = True,
+    ) -> dict | None:
         """
         调度护盾到期事件
+
+        Returns:
+            dict | None: 调度的事件；会话中没有进行中的战斗时返回 None（不会自动到期）
         """
-        # 使用 infrastructure scheduler 避免循环引用
-        from ...infrastructure.scheduler import schedule_event
+        current_time = get_conversation_current_time(conversation_id, is_group)
+        if current_time is None:
+            return None
 
-        # 获取角色名
         character = await self._get_active_character(user_id)
-
         if not character:
-            return
+            return None
         character_name = character.get("name", "未知角色")
 
         # 确定模式
@@ -940,8 +942,7 @@ class ResourceRecordModule:
         action_desc = f"{character_name} {coverage_type}护盾 {shield_value}"
         callback_msg = f"{character_name} {coverage_type}护盾 {shield_value} 到期"
 
-        # 调用 scheduler 调度事件
-        schedule_event(
+        return await schedule_event(
             conversation_id=conversation_id,
             user_id=user_id,
             character_name=character_name,
@@ -950,47 +951,27 @@ class ResourceRecordModule:
             callback_path="trpg.service.resource.resource.remove_expired_shield",
             callback_args={"user_id": user_id, "shield_created_at": shield_created_at},
             callback_message=callback_msg,
+            current_time=current_time,
             mode=mode,
             event_type="shield",
+            is_group=is_group,
         )
 
 
 async def remove_expired_shield(user_id: str, shield_created_at: str) -> bool:
     """
-    模块级函数，用于移除到期的护盾
-    由战斗系统在定时事件触发时调用
+    模块级函数，用于移除到期的护盾（定时事件到期回调）
 
-    infrastructure 层会统一处理事件循环
+    按 created_at 精确匹配；在该用户的所有角色中查找。
     """
-    from ..character.character import character_module
-
-    character = await character_module.get_active_character(user_id)
-    if not character:
-        return False
-
-    resources = character.get("resources", {})
-    shields = resources.get("shields", [])
-
-    if not shields:
-        return False
-
-    # 查找并移除指定 created_at 的护盾
-    original_count = len(shields)
-    shields = [s for s in shields if s.get("created_at") != shield_created_at]
-
-    if len(shields) < original_count:
-        resources["shields"] = shields
-
-        # 保存角色数据
-        characters = await character_module._get_user_characters(user_id)
-        for i, char in enumerate(characters):
-            if char.get("name") == character.get("name"):
-                characters[i] = character
-                break
-
-        await character_module._save_characters(user_id, characters)
-        return True
-
+    async with StorageBackend.edit_characters(user_id) as characters:
+        for character in characters:
+            resources = character.get("resources") or {}
+            shields = resources.get("shields") or []
+            kept = [s for s in shields if s.get("created_at") != shield_created_at]
+            if len(kept) < len(shields):
+                resources["shields"] = kept
+                return True
     return False
 
 

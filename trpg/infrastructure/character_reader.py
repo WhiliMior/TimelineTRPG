@@ -230,6 +230,18 @@ class CharacterReader:
         return attribute
 
     @staticmethod
+    def effective_level(character_data: dict | None) -> float:
+        """
+        读取用于公式计算的等级，缺失、非数字或小于 1 时按 1 计算（避免除零）
+        """
+        value = (character_data or {}).get("等级", 1)
+        try:
+            level = float(value)
+        except (TypeError, ValueError):
+            return 1.0
+        return level if level >= 1 else 1.0
+
+    @staticmethod
     def is_number(value) -> bool:
         """
         检查值是否为数字

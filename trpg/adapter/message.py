@@ -6,8 +6,11 @@
 """
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger("TimelineTRPG.adapter")
 
 
 @dataclass
@@ -91,6 +94,12 @@ class ReplyManager:
             raise ValueError(f"配置文件格式错误: {config_path} - {e}")
 
     @classmethod
+    def clear_cache(cls):
+        """清空模板缓存，下次使用时重新加载"""
+        cls._config_loaded = False
+        cls._templates = {}
+
+    @classmethod
     def reload_config(cls):
         """重新加载配置文件"""
         cls._config_loaded = False
@@ -108,18 +117,14 @@ class ReplyManager:
         Returns:
             渲染后的字符串
 
-        Raises:
-            KeyError: 如果模块或模板不存在
+        模板缺失时记录错误日志并返回通用提示，不让整条指令因文案缺失而失败。
         """
-        if self.module_name not in self._templates:
-            raise KeyError(f"模块 '{self.module_name}' 在配置文件中不存在")
-
-        if template_name not in self._templates[self.module_name]:
-            raise KeyError(
-                f"模板 '{template_name}' 在模块 '{self.module_name}' 中不存在"
+        template = self._templates.get(self.module_name, {}).get(template_name)
+        if template is None:
+            logger.error(f"[ReplyManager] 模板缺失: {self.module_name}.{template_name}")
+            template = self._templates.get("system", {}).get(
+                "template_missing", "操作未完成，请稍后重试"
             )
-
-        template = self._templates[self.module_name][template_name]
 
         # 简单替换变量：{var} -> value
         for key, value in variables.items():

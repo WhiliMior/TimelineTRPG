@@ -41,6 +41,21 @@ class CommandContext:
     # 收集的回复载荷
     reply_payloads: list[ReplyPayload] = field(default_factory=list, init=False)
 
+    @property
+    def is_group(self) -> bool:
+        """是否为群聊（AstrBot 私聊时 group_id 是空字符串而不是 None）"""
+        return bool(self.group_id)
+
+    @property
+    def conversation_id(self) -> str:
+        """会话级数据（时间线、物品重量、检定目标等）的存储键"""
+        return str(self.group_id or self.session_id or self.sender_id or "default")
+
+    @property
+    def session_type(self) -> str:
+        """会话类型 "group" / "private"，用于按会话类型分目录存储"""
+        return "group" if self.is_group else "private"
+
     def send(
         self,
         text: str,
