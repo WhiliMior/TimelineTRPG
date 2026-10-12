@@ -305,18 +305,20 @@ class BuffModule:
             return []
         return active_char.get("buffs", [])
 
-    async def _save_buffs(self, user_id: str, buffs: list[dict]):
+    async def _save_buffs(self, user_id: str, buffs: list[dict]) -> bool:
         """保存buff列表 - 通过StorageBackend保存到角色buffs字段中"""
 
         active_char = await self._get_active_character(user_id)
         if not active_char:
-            return
+            return False
 
         # 更新角色的buffs字段
         active_char["buffs"] = buffs
 
         # 通过StorageBackend保存整个角色数据
-        StorageBackend.update_character(user_id, active_char.get("name"), active_char)
+        return StorageBackend.update_character(
+            user_id, active_char.get("name"), active_char
+        )
 
     async def _add_buff(
         self,

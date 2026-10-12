@@ -21,6 +21,23 @@ WEAPON_TYPE_MAP = {
     "none": "无类型",
 }
 
+# 用户输入 -> 内部类型，只支持三种类型
+_WEAPON_TYPE_INPUTS = {
+    "amplifier": "amplifier",
+    "artillery": "artillery",
+    "none": "none",
+    "增幅": "amplifier",
+    "火力": "artillery",
+    "无类型": "none",
+    "无": "none",
+    "": "none",
+}
+
+
+def normalize_weapon_type(raw: str) -> str | None:
+    """把用户输入的武器类型转换为内部类型，无效时返回 None"""
+    return _WEAPON_TYPE_INPUTS.get(raw.strip().lower())
+
 
 class WeaponModule:
     """
@@ -100,13 +117,12 @@ class WeaponModule:
         if not args.strip():
             return None
 
-        # 预处理：将中文冒号替换为英文冒号
-        args = args.replace("：", ":")
+        # 手机输入法常打出全角冒号/逗号
+        args = args.replace("：", ":").replace("，", ",")
 
         # 解析键值对
         params = []
         current_param = ""
-        in_key = True
         colon_found = False
 
         for char in args:
@@ -117,12 +133,9 @@ class WeaponModule:
                 # 值结束，添加参数
                 params.append(current_param.strip())
                 current_param = ""
-                in_key = True
                 colon_found = False
             else:
                 current_param += char
-                if char == ":":
-                    in_key = False
 
         # 添加最后一个参数
         if current_param.strip():
@@ -181,26 +194,12 @@ class WeaponModule:
                     else:
                         weapon_data[field_name] = value
 
-        # 武器类型映射：只支持三种类型
-        # amplifier=增幅, artillery=火力, none=无类型
-        valid_types = {"amplifier", "artillery", "none", "增幅", "火力", "无类型"}
-        type_map = {
-            "增幅": "amplifier",
-            "火力": "artillery",
-            "无类型": "none",
-            "无": "none",
-            "": "none",
-        }
-
         if "type" in weapon_data:
-            input_type = weapon_data["type"].strip().lower()
-            if input_type in valid_types:
-                weapon_data["type"] = type_map.get(
-                    weapon_data["type"], weapon_data["type"]
-                )
-            else:
+            weapon_type = normalize_weapon_type(str(weapon_data["type"]))
+            if weapon_type is None:
                 # 无效类型，返回None拒绝创建
                 return None
+            weapon_data["type"] = weapon_type
 
         # 验证必填字段
         if "name" not in weapon_data or not weapon_data["name"]:
@@ -309,19 +308,21 @@ class WeaponModule:
         weapons = active_char.get("weapons", [])
         return weapons
 
-    async def _save_weapons(self, user_id: str, weapons: list[dict]):
+    async def _save_weapons(self, user_id: str, weapons: list[dict]) -> bool:
         """保存武器列表 - 通过StorageBackend保存到角色weapons字段中"""
         from ...infrastructure.storage import StorageBackend
 
         active_char = await self._get_active_character(user_id)
         if not active_char:
-            return
+            return False
 
         # 更新角色的weapons字段
         active_char["weapons"] = weapons
 
         # 通过StorageBackend保存整个角色数据
-        StorageBackend.update_character(user_id, active_char.get("name"), active_char)
+        return StorageBackend.update_character(
+            user_id, active_char.get("name"), active_char
+        )
 
     async def _create_weapon_from_data(self, user_id: str, weapon_data: dict) -> str:
         """从参数字典创建武器"""
@@ -380,7 +381,9 @@ class WeaponModule:
             return self.reply.render("wp_create_usage")
 
         name = args[0]
-        weapon_type = args[1]
+        weapon_type = normalize_weapon_type(args[1])
+        if weapon_type is None:
+            return self.reply.render("wp_create_usage")
         attribute = args[2]
 
         damage = 0
