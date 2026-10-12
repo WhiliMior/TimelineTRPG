@@ -45,7 +45,9 @@ def _write_legacy_battle(data_dir, conversation_id, participants):
         "scheduled_events": [],
     }
     path.write_text(
-        json.dumps({"active_battle_id": "1", "player": {}, "battle_list": {"1": battle}}),
+        json.dumps(
+            {"active_battle_id": "1", "player": {}, "battle_list": {"1": battle}}
+        ),
         encoding="utf-8",
     )
     return path

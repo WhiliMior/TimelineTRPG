@@ -59,9 +59,7 @@ def test_corrupted_file_gives_player_a_clear_message(data_dir, make_ctx, run):
     plugin = main.TimelineTRPG(context=None)
     ctx = make_ctx("chr")
     run(plugin.router.dispatch(ctx))
-    assert ctx.get_reply_texts() == [
-        plugin.system_reply.render("data_corrupted")
-    ]
+    assert ctx.get_reply_texts() == [plugin.system_reply.render("data_corrupted")]
 
 
 def test_battle_timeline_has_schema_version(data_dir):

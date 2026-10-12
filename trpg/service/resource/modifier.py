@@ -203,7 +203,6 @@ class ResourceModifierModule:
 
         # 检查是否以正负号开头
         if range_input.startswith(("+", "-")):
-            sign = range_input[0]
             base_range = range_input[1:]
             if base_range in ["hp", "mp", "all"]:
                 return range_input

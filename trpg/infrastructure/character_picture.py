@@ -14,10 +14,10 @@ from pathlib import Path
 from PIL import Image as PilImage
 from PIL import ImageDraw, ImageFont
 
-logger = logging.getLogger("TimelineTRPG.character_picture")
-
 from .character_reader import CharacterReader
 from .storage import StorageBackend, StorageType
+
+logger = logging.getLogger("TimelineTRPG.character_picture")
 
 
 @dataclass

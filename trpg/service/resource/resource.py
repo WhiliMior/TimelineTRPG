@@ -290,9 +290,6 @@ class ResourceRecordModule:
         # 按优先级排序：同类型优先，持续时间短优先，创建时间早优先
         sorted_shields = sorted(shields, key=get_priority)
 
-        # 记录每种类型护盾的总消耗和调整前后值
-        shield_damage_before = damage_to_absorb  # 承伤前
-
         # 处理护盾消耗
         for shield in sorted_shields:
             if remaining_damage <= 0:
@@ -392,7 +389,6 @@ class ResourceRecordModule:
 
         # 确定操作方向：正值为增加(+)，负值为减少(-)
         is_increase = value_change > 0
-        sign = "+" if is_increase else "-"
 
         # 根据资源类型和操作方向确定目标范围
         # +范围只对增加资源生效，-范围只对减少资源生效
@@ -613,7 +609,6 @@ class ResourceRecordModule:
                 change_type = potential_type
 
         # 应用资源修饰（对正值和负值都应用，只是范围不同）
-        original_change = value_change
         if resource_type in ["hp", "mp"]:
             value_change, modifier_info = await self._apply_modifiers(
                 user_id, resource_type, value_change, change_type
@@ -630,7 +625,6 @@ class ResourceRecordModule:
         current_value = resources.get(current_attr, 0)
 
         # 应用护盾保护（仅对负值，即减少操作）
-        original_change = value_change
         if resource_type in ["hp", "mp"] and value_change < 0:
             value_change, shield_info = await self._apply_shield_protection(
                 user_id, resources, resource_type, value_change
@@ -642,7 +636,6 @@ class ResourceRecordModule:
         new_value = current_value + value_change
 
         # 验证范围（除非允许溢出）
-        overflow_msg = ""
         if not allow_overflow:
             if new_value < 0:
                 new_value = 0
