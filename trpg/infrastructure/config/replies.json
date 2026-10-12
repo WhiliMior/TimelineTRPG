@@ -1,9 +1,14 @@
 {
   "roll_dice": {
     "default_roll": "掷骰结果: {result}",
-    "roll_result": "掷骰 {expression} 结果: {result}\n({rolls})",
+    "roll_result": "掷骰 {expression} 结果: {result}\n明细: {rolls}",
     "rd_result": "随机数生成 {expression}: {result}",
-    "help": "r/rd 指令帮助"
+    "help": "r/rd 指令帮助",
+    "roll_result_single": "掷骰 {expression} 结果: {result}",
+    "invalid_expression": "无法识别的掷骰表达式：{expression}\n用法：.r 3d6+2 / .r d20 / .r 100",
+    "too_many_dice": "骰子数量过多（最多 {max} 个）\n用法：.r 3d6+2",
+    "too_many_sides": "骰子面数过大（最多 {max} 面）\n用法：.r 3d6+2",
+    "expression_too_long": "表达式过长（最多 {max} 个字符）"
   },
   "examination": {
     "no_character": "{user} 还没有角色",
