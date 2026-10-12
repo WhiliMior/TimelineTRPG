@@ -53,7 +53,7 @@ class NegotiationModule:
         if not ctx.args:
             # 显示当前交涉对象
             target = self._get_negotiation_target(conversation_id, session_type)
-            if target is None:
+            if not target or "level" not in target:
                 response = self.reply.render("no_current_negotiation_target")
             else:
                 target_level = target["level"]
