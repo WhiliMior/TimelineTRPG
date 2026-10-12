@@ -340,9 +340,9 @@ class TimelineModule:
         if not battle:
             return self.reply.render("no_active_timeline")
 
-        # 实时计算 current_time（通过 self._timeline_core）
-        current_time = self._timeline_core.get_current_time(battle)
-        battle["current_time"] = current_time
+        # 实时计算 current_time / max_time（通过 self._timeline_core）
+        battle["current_time"] = self._timeline_core.get_current_time(battle)
+        battle["max_time"] = self._timeline_core.get_max_time(battle)
 
         # 使用统一的 timeline 格式化器
         return timeline_formatter.format_timeline(battle, attribute_label="属性")
@@ -368,8 +368,8 @@ class TimelineModule:
         except ValueError:
             return self.reply.render("invalid_time_format")
 
-        # 检查目标时间点是否超过max_time
-        max_time = battle.get("max_time", 0)
+        # max_time 不再持久化，必须实时计算
+        max_time = self._timeline_core.get_max_time(battle)
         if target_time > max_time:
             return self.reply.render("time_exceeds_max", time=target_time, max=max_time)
 

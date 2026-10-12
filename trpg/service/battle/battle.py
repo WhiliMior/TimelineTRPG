@@ -662,13 +662,9 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        # 递减当前角色的计数模式buff事件（在添加新行动之后）
-        self._decrement_count_based_events(
-            storage_key, user_id, character_name, is_group
+        battle, executed = self._process_scheduled_events(
+            storage_key, user_id, character_name, is_group, decrement=True
         )
-
-        # 执行到期的定时事件
-        executed = self.execute_scheduled_events(storage_key, user_id, is_group)
 
         # 如果有到期事件，将消息添加到返回结果中
         timeline_result = self._format_timeline_display(battle)
@@ -678,84 +674,57 @@ class BattleModule:
 
         return timeline_result
 
+    def _process_scheduled_events(
+        self,
+        storage_key: str,
+        user_id: str,
+        character_name: str,
+        is_group: bool,
+        decrement: bool,
+    ) -> tuple[dict, list[str]]:
+        """
+        行动写入后结算定时事件，并重新读取战斗数据
+
+        调度器会直接读写存储文件，因此结算完成后必须重新读取，
+        否则显示的定时事件剩余次数/到期列表会是旧数据。
+
+        Returns:
+            (最新的战斗数据, 到期事件消息列表)
+        """
+        executed: list[str] = []
+        if decrement:
+            executed.extend(
+                self._decrement_count_based_events(
+                    storage_key, user_id, character_name, is_group
+                )
+            )
+        executed.extend(self.execute_scheduled_events(storage_key, user_id, is_group))
+        return self._get_battle(storage_key, is_group), [m for m in executed if m]
+
     def _decrement_count_based_events(
         self, storage_key: str, user_id: str, character_name: str, is_group: bool
-    ):
+    ) -> list[str]:
         """
         递减指定用户当前角色的计数模式事件的剩余次数
-        包括buff、护盾、资源修饰事件
-
-        Args:
-            storage_key: 会话ID
-            user_id: 用户ID
-            character_name: 角色名
-            is_group: 是否为群聊
+        包括buff、护盾、资源修饰事件（委托给调度器，调度器每次都会保存）
         """
-        battle = self._get_battle(storage_key, is_group)
-        if not battle.get("name"):
-            return
+        from ...infrastructure.scheduler import decrement_count_based_events
 
-        scheduled_events = battle.get("scheduled_events", [])
-
-        events_to_remove = []
-
-        for i, event in enumerate(scheduled_events):
-            # 检查是否为该用户和角色的计数模式事件
-            if (
-                event.get("user_id") == user_id
-                and event.get("character_name") == character_name
-                and event.get("mode") == "count_based"
-                and event.get("remaining_count") is not None
-            ):
-                # 递减剩余次数
-                event["remaining_count"] -= 1
-
-                # 检查是否已达到次数限制
-                if event["remaining_count"] <= 0:
-                    # 执行回调
-                    if "callback_path" in event and event["callback_path"]:
-                        from ...infrastructure.scheduler import _execute_callback
-
-                        try:
-                            callback_path = event["callback_path"]
-                            callback_args = event.get("callback_args", {})
-                            _execute_callback(callback_path, callback_args)
-                        except Exception as e:
-                            print(f"Error executing count_based event callback: {e}")
-
-                    events_to_remove.append(i)
-
-        # 从后往前删除已达到次数限制的事件
-        for i in reversed(events_to_remove):
-            del scheduled_events[i]
-
-        # 保存数据
-        if events_to_remove:
-            battle["scheduled_events"] = scheduled_events
-            self._save_battle(storage_key, battle, is_group)
+        return decrement_count_based_events(
+            storage_key, user_id, character_name, is_group
+        )
 
     async def _insert_action(
         self,
         storage_key: str,
         user_id: str,
+        is_group: bool,
         insert_time: str,
         attribute: str,
         args: list[str],
     ) -> str:
         """在指定时间点插入行动"""
-        battle = self._get_battle(storage_key)
-
-        # 如果没有战斗数据，自动创建一个（兼容 timeline 创建的时间线）
-        if not battle:
-            battle = {
-                "name": "时间线战斗",
-                "name": "时间线战斗",
-                "participants": {},
-                "timeline": {},
-                "current_time": 0,
-                "max_time": 0,
-                "created_at": self._get_current_time(),
-            }
+        battle = self._get_battle(storage_key, is_group)
 
         # 如果没有战斗，返回错误
         if not battle.get("name"):
@@ -804,23 +773,24 @@ class BattleModule:
         found_ongoing = False
         for time_str, actions in battle.get("timeline", {}).items():
             for action in actions:
-                action_start = float(time_str) - action["lead_time"]
+                lead_time = action.get("lead_time", 0) or 0
                 action_end = float(time_str)
+                action_start = action_end - lead_time
 
                 if (
-                    action_start < insert_time_val < action_end
-                    and action["user_id"] == user_id
+                    lead_time > 0
+                    and action_start < insert_time_val < action_end
+                    and action.get("user_id") == user_id
                 ):
                     # 提前终止原行动
                     elapsed = insert_time_val - action_start
-                    completion = elapsed / action["lead_time"]
-                    completed_impact = action["impact_value"] * completion
+                    completion = elapsed / lead_time
+                    completed_impact = action.get("impact_value", 0) * completion
                     action["impact_value"] = self._format_impact(completed_impact)
                     action["lead_time"] = self._format_time(elapsed)
+                    old_notes = action.get("notes", "")
                     action["notes"] = (
-                        "[提前终止] " + action["notes"]
-                        if action["notes"]
-                        else "[提前终止]"
+                        "[提前终止] " + old_notes if old_notes else "[提前终止]"
                     )
                     found_ongoing = True
                     break
@@ -856,8 +826,9 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        # 执行到期的定时事件
-        executed = self.execute_scheduled_events(storage_key, user_id, is_group)
+        battle, executed = self._process_scheduled_events(
+            storage_key, user_id, character_name, is_group, decrement=False
+        )
 
         # 如果有到期事件，将消息添加到返回结果中
         timeline_result = self._format_timeline_display(battle)
@@ -916,14 +887,15 @@ class BattleModule:
             if not battle["timeline"][last_action_time_str]:
                 del battle["timeline"][last_action_time_str]
 
+        # 先保存撤销结果，再结算定时事件；顺序反过来会用旧数据覆盖调度器的修改
+        self._save_battle(storage_key, battle, is_group)
+
         # 恢复被撤销的计数模式事件（恢复1次）
         self._restore_count_based_events(storage_key, user_id, character_name, is_group)
 
-        # 执行到期的定时事件
-        executed = self.execute_scheduled_events(storage_key, user_id, is_group)
-
-        # 保存战斗数据
-        self._save_battle(storage_key, battle, is_group)
+        battle, executed = self._process_scheduled_events(
+            storage_key, user_id, character_name, is_group, decrement=False
+        )
 
         # 格式化输出当前时间轴状态
         timeline_result = self._format_timeline_display(battle)
@@ -1001,7 +973,7 @@ class BattleModule:
 
         # 检查是否是装填指令
         if args and args[0].lower() in ("re", "reload", "装填"):
-            return await self._weapon_reload(user_id, battle, is_group)
+            return await self._weapon_reload(storage_key, user_id, battle, is_group)
 
         # 解析参数
         if not args:
@@ -1268,7 +1240,9 @@ class BattleModule:
             extra_info=extra_info,
         )
 
-    async def _weapon_reload(self, user_id: str, battle: dict, is_group: bool) -> str:
+    async def _weapon_reload(
+        self, storage_key: str, user_id: str, battle: dict, is_group: bool
+    ) -> str:
         """火力武器装填"""
         from ..weapon.weapon import weapon_module
 
@@ -1296,8 +1270,6 @@ class BattleModule:
         if not active_char:
             return self.reply.render("no_character")
         character_name = str(active_char.get("name", "未知角色"))
-
-        storage_key = f"{battle.get('conversation_id', 'default')}"
 
         # 添加装填行动
         result = await self._add_action_with_weapon(
@@ -1409,13 +1381,9 @@ class BattleModule:
         # 保存战斗数据
         self._save_battle(storage_key, battle, is_group)
 
-        # 递减当前角色的计数模式buff事件
-        self._decrement_count_based_events(
-            storage_key, user_id, character_name, is_group
+        battle, executed = self._process_scheduled_events(
+            storage_key, user_id, character_name, is_group, decrement=True
         )
-
-        # 执行到期的定时事件
-        executed = self.execute_scheduled_events(storage_key, user_id, is_group)
 
         # 格式化输出 - 使用统一的 timeline 格式化器
         timeline_result = self._format_timeline_display(
